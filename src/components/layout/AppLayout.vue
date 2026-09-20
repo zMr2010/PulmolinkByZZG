@@ -30,6 +30,7 @@ const tabTitles: Record<string, string> = {
   'doctor-admin-access': 'ui.patientAccess.title',
   'doctor-admin-stats': 'ui.adminStats.title',
   'doctor-archived': 'ui.archive.title',
+  'doctor-patient-simulation': 'Simulation',
   'patient-dashboard': 'My Health',
   'patient-examinations': 'My Examinations',
   'patient-examination-detail': 'Examination Detail',
