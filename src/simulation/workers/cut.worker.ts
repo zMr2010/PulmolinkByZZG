@@ -18,9 +18,11 @@ self.onmessage = (event: MessageEvent<CutRequest>) => {
       new Uint32Array(message.indices),
       new Uint32Array(message.path),
     )
+    const closedPositions = new Float32Array(split.positions)
     const positions = openPredictedSeam(split, message.maximumHalfWidth)
     const transfer = [
       positions.buffer,
+      closedPositions.buffer,
       split.indices.buffer,
       split.leftBoundary.buffer,
       split.rightBoundary.buffer,
@@ -32,6 +34,7 @@ self.onmessage = (event: MessageEvent<CutRequest>) => {
       type: 'result',
       requestId: message.requestId,
       positions: positions.buffer,
+      closedPositions: closedPositions.buffer,
       indices: split.indices.buffer,
       leftBoundary: split.leftBoundary.buffer,
       rightBoundary: split.rightBoundary.buffer,

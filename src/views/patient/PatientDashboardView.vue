@@ -235,7 +235,7 @@ onMounted(async () => {
 <template>
   <div class="page patient-health-page">
     <PageHeader
-      :title="$t('My Health')"
+      :title="$t('ui.nav.myHealth')"
       :subtitle="locale === 'zh' ? `欢迎回来，${auth.session?.name ?? '患者'}。以下是您的 3D 人体解剖与器官全景视图。` : `Welcome back, ${auth.session?.name ?? 'Patient'}. Below is your 3D anatomical model and overview.`"
     >
       <template #actions>
@@ -249,10 +249,10 @@ onMounted(async () => {
             </select>
           </div>
           <button type="button" class="btn btn-secondary btn-sm" @click="router.push({ name: 'patient-examinations' })">
-            <Stethoscope :size="15" /> {{ $t('My Examinations') }}
+            <Stethoscope :size="15" /> {{ $t('ui.nav.myExaminations') }}
           </button>
           <button type="button" class="btn btn-secondary btn-sm" @click="router.push({ name: 'patient-reports' })">
-            <FileText :size="15" /> {{ $t('My Reports') }}
+            <FileText :size="15" /> {{ $t('ui.nav.myReports') }}
           </button>
         </div>
       </template>

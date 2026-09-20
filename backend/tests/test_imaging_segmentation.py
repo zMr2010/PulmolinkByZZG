@@ -9,7 +9,7 @@ import trimesh
 
 from app.cli import install_default, set_access
 from app.errors import APIError
-from app.models import OrganModel, SegmentationTask
+from app.models import MedicalImage, OrganModel, SegmentationTask
 from app.services.imaging import load_volume, mask_to_glb
 from app.services.storage import stored_path
 from tests.conftest import SyntheticAdapter, upload
@@ -94,6 +94,23 @@ def test_upload_slice_segmentation_glb_permissions(app_env, people, nifti_file):
         assert stored_path(settings, db.get(OrganModel, model_id).mask_path).is_file()
         set_access(db, "doctor_a", people["patient_a_pid"], "revoked")
     assert client.get(model_route + "/file", headers=people["doctor_a"]).status_code == 403
+
+
+def test_ct_dot_nii_gz_upload_is_accepted_and_stored(app_env, people, nifti_file):
+    app, client, settings, _ = app_env
+    with nifti_file.open("rb") as source:
+        response = client.post(
+            f"/api/v1/patients/{people['patient_a_pid']}/medical-images",
+            headers=people["doctor_a"],
+            files={"file": ("CT.nii.gz", source, "application/gzip")},
+            data={"organ_id": "lung", "image_type": "CT"},
+        )
+    assert response.status_code == 201, response.text
+    image_id = response.json()["data"]["image_id"]
+    with app.state.session_factory() as db:
+        image = db.get(MedicalImage, image_id)
+        assert image.file_path.endswith(".nii.gz")
+        assert stored_path(settings, image.file_path).is_file()
 
 
 def test_dicom_gateway_is_closed_when_unconfigured(app_env, people):

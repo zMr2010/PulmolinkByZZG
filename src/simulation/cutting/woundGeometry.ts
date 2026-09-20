@@ -46,6 +46,50 @@ export function nearestBoundaryVertexAtFraction(
   return boundary[best]
 }
 
+export function nearestMergeBoundaryVertex(
+  positions: Float32Array,
+  boundaries: readonly Uint32Array[],
+  candidate: number,
+  maximumDistance: number,
+) {
+  const offset = candidate * 3
+  let nearest = candidate
+  let nearestDistance = maximumDistance
+  for (const boundary of boundaries) {
+    for (const vertexId of boundary) {
+      const target = vertexId * 3
+      const distance = Math.hypot(
+        positions[offset] - positions[target],
+        positions[offset + 1] - positions[target + 1],
+        positions[offset + 2] - positions[target + 2],
+      )
+      if (distance < nearestDistance) {
+        nearest = vertexId
+        nearestDistance = distance
+      }
+    }
+  }
+  return nearest
+}
+
+export function regularOpeningPositions(
+  closed: Float32Array,
+  fullyOpened: Float32Array,
+  openingPercent: number,
+) {
+  if (closed.length !== fullyOpened.length || closed.length % 3 !== 0) {
+    throw new Error('Regular wound opening requires matching packed xyz buffers')
+  }
+  const scale = THREE.MathUtils.clamp(openingPercent, 0, 100) / 100
+  const positions = new Float32Array(closed.length)
+  const displacement = new Float32Array(closed.length)
+  for (let index = 0; index < closed.length; index++) {
+    displacement[index] = fullyOpened[index] - closed[index]
+    positions[index] = closed[index] + displacement[index] * scale
+  }
+  return { positions, displacement, scale }
+}
+
 export function woundBoundaryGeometry(
   position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
   left: Uint32Array,
@@ -56,6 +100,22 @@ export function woundBoundaryGeometry(
   if (points.length < 3) return new THREE.BufferGeometry().setFromPoints(points)
   const curve = new THREE.CatmullRomCurve3(points, true, 'centripetal', 0.45)
   return new THREE.TubeGeometry(curve, Math.max(24, points.length * 3), tubeRadius, 8, true)
+}
+
+/**
+ * Builds the visible wound edge from the draggable cage vertices themselves.
+ * Centripetal Catmull-Rom is interpolating: the rendered edge passes through
+ * every polygon control without the large overshoot of a uniform spline.
+ */
+export function woundControlPolygonGeometry(
+  position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  controlVertexIds: Uint32Array,
+  tubeRadius: number,
+) {
+  const points = boundaryPoints(position, controlVertexIds)
+  if (points.length < 3) return new THREE.BufferGeometry().setFromPoints(points)
+  const curve = new THREE.CatmullRomCurve3(points, true, 'centripetal', 0.45)
+  return new THREE.TubeGeometry(curve, Math.max(32, points.length * 8), tubeRadius, 8, true)
 }
 
 export function woundSidewallGeometry(
@@ -86,6 +146,39 @@ export function woundSidewallGeometry(
   appendStrip(right)
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  geometry.setIndex(triangles)
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+/** A real inner surface at the selected incision depth, joining both walls. */
+export function woundInteriorGeometry(
+  position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  normal: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  left: Uint32Array,
+  right: Uint32Array,
+  depth: number,
+) {
+  const count = Math.min(left.length, right.length)
+  const vertices = new Float32Array(count * 2 * 3)
+  const triangles: number[] = []
+  for (let index = 0; index < count; index++) {
+    const ids = [left[index], right[index]]
+    for (let side = 0; side < 2; side++) {
+      const point = new THREE.Vector3().fromBufferAttribute(position, ids[side])
+      const inward = new THREE.Vector3().fromBufferAttribute(normal, ids[side]).normalize().multiplyScalar(-depth)
+      point.add(inward).toArray(vertices, (index * 2 + side) * 3)
+    }
+  }
+  for (let index = 0; index < count - 1; index++) {
+    const left0 = index * 2
+    const right0 = left0 + 1
+    const left1 = left0 + 2
+    const right1 = left0 + 3
+    triangles.push(left0, left1, right0, left1, right1, right0)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
   geometry.setIndex(triangles)
   geometry.computeVertexNormals()
   return geometry

@@ -4,11 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VENV_DIR="${RADSIGHT_VENV:-$PROJECT_ROOT/.venv-radsight}"
-VISION_DIR="${RADSIGHT_VISION_ENCODER_PATH:-/Users/allenyuan/modilify_app/VL3-SigLIP-NaViT}"
+VISION_DIR="${RADSIGHT_VISION_ENCODER_PATH:-$HOME/.cache/radsight/VL3-SigLIP-NaViT}"
 PYTHON_BIN="${RADSIGHT_BOOTSTRAP_PYTHON:-}"
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  for candidate in python3.12 python3.11 /Users/allenyuan/.local/bin/python3.11 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11; do
+  for candidate in python3.12 python3.11 "$HOME/.local/bin/python3.11" /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11; do
     if command -v "$candidate" >/dev/null 2>&1; then
       PYTHON_BIN="$(command -v "$candidate")"
       break

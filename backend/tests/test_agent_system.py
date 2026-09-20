@@ -6,15 +6,16 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from sqlalchemy import select
 
 from app.models import AgentConversation
+from app.services.agent.pi_bridge import PI_CLI_PATH, pi_executable_command
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-from radsight_runtime.infer import VolumeTensorCache  # noqa: E402
 from radsight_runtime.volume import (  # noqa: E402
     inspect_nifti_volume,
     looks_like_stub_template,
@@ -60,8 +61,11 @@ def test_radsight_hu_normalization():
 
 
 def test_radsight_volume_cache_hits_and_invalidates(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    pytest.importorskip("monai")
     import radsight_runtime.infer as infer
     import torch
+    from radsight_runtime.infer import VolumeTensorCache
 
     path = tmp_path / "ct.nii.gz"
     path.write_bytes(b"first")
@@ -104,8 +108,10 @@ def test_internal_agent_tools_endpoints(app_env, people):
     assert ct_res.status_code == 200
     scans = ct_res.json()
     assert isinstance(scans, list)
-    assert len(scans) >= 1
-    assert "file_path" in scans[0]
+    # The Agent must never fabricate a fallback scan when the patient fixture
+    # has no uploaded CT. Real scans, when present, expose their storage path.
+    if scans:
+        assert "file_path" in scans[0]
 
     rec_res = client.get(f"/api/v1/agent/internal/patients/{pid}/records", headers=people["doctor_a"])
     assert rec_res.status_code == 200
@@ -127,6 +133,13 @@ def test_treatment_plan_extension_is_registered():
     assert "TREATMENT_PLAN_START" in extension
     assert "draft_treatment_plan" in bridge
     assert "needs_plan" in bridge
+
+
+def test_pi_runtime_uses_the_installed_cross_platform_cli():
+    command = pi_executable_command()
+    assert Path(command[0]).is_file()
+    assert Path(command[1]) == PI_CLI_PATH
+    assert PI_CLI_PATH.is_file()
 
 
 def test_agent_conversation_creation_and_persistence(app_env, people):
@@ -151,3 +164,38 @@ def test_agent_conversation_creation_and_persistence(app_env, people):
         assert db_conv is not None
         assert db_conv.patient_id == pid
         assert db_conv.title == "胸部结节会诊讨论"
+
+
+def test_agent_patient_scope_and_conversation_ownership(app_env, people):
+    _, client, _, _ = app_env
+    patient_id = people["patient_a_pid"]
+
+    denied = client.get(
+        f"/api/v1/agent/conversations?patient_id={patient_id}",
+        headers=people["doctor_b"],
+    )
+    assert denied.status_code == 403
+
+    patient_status = client.get("/api/v1/agent/status", headers=people["patient_a"])
+    assert patient_status.status_code == 403
+
+    created = client.post(
+        "/api/v1/agent/conversations",
+        json={"patient_id": patient_id, "title": "访问范围测试"},
+        headers=people["doctor_a"],
+    )
+    assert created.status_code == 200
+    conversation_id = created.json()["data"]["id"]
+
+    hidden = client.get(
+        f"/api/v1/agent/conversations/{conversation_id}/messages",
+        headers=people["doctor_b"],
+    )
+    assert hidden.status_code == 404
+
+    deleted = client.delete(
+        f"/api/v1/agent/conversations/{conversation_id}",
+        headers=people["doctor_a"],
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["data"] == {"deleted": True}

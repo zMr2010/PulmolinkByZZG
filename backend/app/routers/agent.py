@@ -4,31 +4,31 @@ Provides endpoints for conversational diagnosis, SSE streaming,
 session management, and internal tool data providers.
 """
 
-import os
 import json
 import logging
-from uuid import uuid4
-from datetime import datetime, UTC
-from typing import Optional, List, Dict, Any
+import os
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import select, desc
 import httpx
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy import delete, desc, select
 
-from app.deps import DB, Config, CurrentUser
-from app.errors import success, Envelope
+from app.audit import audit
+from app.deps import DB, Config, CurrentUser, check_patient_access, require_doctor
+from app.errors import APIError, success
 from app.models import (
     AgentConversation,
     AgentMessage,
-    Patient,
     MedicalImage,
     MedicalRecord,
     OrganModel,
+    Patient,
     SegmentationBatch,
-    User,
     utcnow,
 )
 from app.organs import ORGANS
@@ -41,21 +41,37 @@ router = APIRouter(prefix="/agent", tags=["AI Copilot Agent"])
 
 class CreateConversationInput(BaseModel):
     patient_id: int
-    title: Optional[str] = "AI 放射与病历会诊"
+    title: str | None = "AI Copilot"
 
 
 class ChatStreamInput(BaseModel):
     conversation_id: str
     patient_id: int
     message: str
-    active_study_id: Optional[str] = None
-    active_series_id: Optional[str] = None
-    active_slice: Optional[int] = None
+    locale: Literal["zh", "en"] = "zh"
+    active_study_id: str | None = None
+    active_series_id: str | None = None
+    active_slice: int | None = None
+
+
+def _conversation_for_user(db: DB, user: CurrentUser, conversation_id: str) -> AgentConversation:
+    require_doctor(db, user)
+    conversation = db.scalar(
+        select(AgentConversation).where(
+            AgentConversation.id == conversation_id,
+            AgentConversation.doctor_id == user.id,
+        )
+    )
+    if conversation is None:
+        raise APIError(404, 40401, "Agent conversation not found")
+    check_patient_access(db, user, conversation.patient_id)
+    return conversation
 
 
 @router.get("/status")
-async def get_agent_status(config: Config):
+async def get_agent_status(config: Config, db: DB, user: CurrentUser):
     """Check Pi runtime readiness, configured LLM provider, and RadSight microservice."""
+    require_doctor(db, user)
     radsight_url = config.radsight_service_url or "http://127.0.0.1:8001"
     radsight_status = "unreachable"
     radsight_details = {}
@@ -103,9 +119,14 @@ def list_conversations(
     patient_id: int = Query(..., description="Patient ID to filter conversations"),
 ):
     """List persistent agent conversations for the given patient."""
+    require_doctor(db, user)
+    check_patient_access(db, user, patient_id)
     stmt = (
         select(AgentConversation)
-        .where(AgentConversation.patient_id == patient_id)
+        .where(
+            AgentConversation.patient_id == patient_id,
+            AgentConversation.doctor_id == user.id,
+        )
         .order_by(desc(AgentConversation.updated_at))
     )
     rows = db.scalars(stmt).all()
@@ -132,16 +153,19 @@ def create_conversation(
     body: CreateConversationInput,
 ):
     """Create a new agent conversation for the patient."""
+    require_doctor(db, user)
+    check_patient_access(db, user, body.patient_id)
     conv_id = f"conv_{uuid4().hex[:12]}"
     conv = AgentConversation(
         id=conv_id,
         patient_id=body.patient_id,
         doctor_id=user.id,
-        title=body.title or "AI 放射与病历会诊",
+        title=body.title or "AI Copilot",
         created_at=utcnow(),
         updated_at=utcnow(),
     )
     db.add(conv)
+    audit(db, user.id, body.patient_id, "agent.conversation.create", "agent_conversation", conv_id)
     db.commit()
     db.refresh(conv)
 
@@ -164,6 +188,7 @@ def get_conversation_messages(
     user: CurrentUser,
 ):
     """Retrieve message history for a conversation."""
+    _conversation_for_user(db, user, conversation_id)
     stmt = (
         select(AgentMessage)
         .where(AgentMessage.conversation_id == conversation_id)
@@ -188,8 +213,28 @@ def get_conversation_messages(
     return success(msgs)
 
 
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str, db: DB, user: CurrentUser):
+    """Delete one owned conversation and its messages after rechecking patient access."""
+    conversation = _conversation_for_user(db, user, conversation_id)
+    patient_id = conversation.patient_id
+    db.execute(delete(AgentMessage).where(AgentMessage.conversation_id == conversation_id))
+    db.delete(conversation)
+    audit(
+        db,
+        user.id,
+        patient_id,
+        "agent.conversation.delete",
+        "agent_conversation",
+        conversation_id,
+    )
+    db.commit()
+    return success({"deleted": True})
+
+
 @router.post("/chat/stream")
 async def chat_stream(
+    request: Request,
     body: ChatStreamInput,
     db: DB,
     user: CurrentUser,
@@ -199,19 +244,36 @@ async def chat_stream(
     Stream agent chat turn using Server-Sent Events (SSE).
     Saves the user message and final assistant response to PostgreSQL.
     """
+    require_doctor(db, user)
+    check_patient_access(db, user, body.patient_id)
     # 1. Ensure conversation exists
-    conv = db.scalar(select(AgentConversation).where(AgentConversation.id == body.conversation_id))
+    conv = db.scalar(
+        select(AgentConversation).where(
+            AgentConversation.id == body.conversation_id,
+            AgentConversation.doctor_id == user.id,
+        )
+    )
     if not conv:
         conv = AgentConversation(
             id=body.conversation_id,
             patient_id=body.patient_id,
             doctor_id=user.id,
-            title="AI 放射与病历会诊",
+            title="AI Copilot",
             created_at=utcnow(),
             updated_at=utcnow(),
         )
         db.add(conv)
+        audit(
+            db,
+            user.id,
+            body.patient_id,
+            "agent.conversation.create",
+            "agent_conversation",
+            body.conversation_id,
+        )
         db.commit()
+    elif conv.patient_id != body.patient_id:
+        raise APIError(409, 40901, "Conversation patient context does not match the request")
 
     # 2. Record user message in DB
     user_msg = AgentMessage(
@@ -225,7 +287,7 @@ async def chat_stream(
     db.commit()
 
     # 3. Stream response via Pi bridge
-    bridge = PiAgentBridge(config)
+    bridge = PiAgentBridge(config, authorization=request.headers.get("authorization"))
 
     async def sse_event_generator():
         accumulated_text = ""
@@ -240,6 +302,7 @@ async def chat_stream(
             active_study_id=body.active_study_id,
             active_series_id=body.active_series_id,
             active_slice=body.active_slice,
+            locale=body.locale,
         ):
             yield chunk
 
@@ -308,8 +371,10 @@ def _resolve_ct_file_path(raw: str | None, storage_root: Path) -> str:
 
 
 @router.get("/internal/patients/{patient_id}/ct_scans")
-def get_patient_ct_scans_internal(patient_id: int, db: DB, config: Config):
+def get_patient_ct_scans_internal(patient_id: int, db: DB, config: Config, user: CurrentUser):
     """Returns all CT scans and series available for the given patient."""
+    require_doctor(db, user)
+    check_patient_access(db, user, patient_id)
     scans = []
 
     # Query MedicalImage
@@ -330,42 +395,14 @@ def get_patient_ct_scans_internal(patient_id: int, db: DB, config: Config):
             }
         )
 
-    # If no images in DB, fallback to demo NIfTI samples
-    if not scans:
-        sample_file = "/Users/allenyuan/Downloads/0.nii.gz"
-        if not os.path.exists(sample_file):
-            sample_file = "backend/fixtures/0.nii.gz"
-        scans.append(
-            {
-                "study_id": "STD-DEMO-001",
-                "series_id": "SER-DEMO-001",
-                "description": "胸部薄层平扫 CT (常规筛查序列)",
-                "modality": "CT",
-                "study_date": "2026-09-15",
-                "slice_count": 128,
-                "file_path": sample_file,
-                "is_segmented": True,
-            }
-        )
-        scans.append(
-            {
-                "study_id": "STD-DEMO-002",
-                "series_id": "SER-DEMO-002",
-                "description": "全腹部增强 CT (历史对比序列)",
-                "modality": "CT",
-                "study_date": "2026-06-10",
-                "slice_count": 160,
-                "file_path": sample_file,
-                "is_segmented": False,
-            }
-        )
-
     return scans
 
 
 @router.get("/internal/patients/{patient_id}/records")
-def get_patient_records_internal(patient_id: int, db: DB):
+def get_patient_records_internal(patient_id: int, db: DB, user: CurrentUser):
     """Returns clinical profile and medical history for the given patient."""
+    require_doctor(db, user)
+    check_patient_access(db, user, patient_id)
     patient = db.scalar(select(Patient).where(Patient.id == patient_id))
     records = db.scalars(select(MedicalRecord).where(MedicalRecord.patient_id == patient_id)).all()
 
@@ -383,30 +420,41 @@ def get_patient_records_internal(patient_id: int, db: DB):
             }
         )
 
-    age = 58
+    age = None
     if patient and patient.birth_date:
         today = datetime.now().date()
         age = today.year - patient.birth_date.year
 
+    clinical_history = "; ".join(
+        filter(None, (record.diagnosis or record.description for record in records))
+    )
+
     return {
         "patient": {
             "id": patient.id if patient else patient_id,
-            "name": patient.name if patient else "张三",
-            "gender": patient.gender if patient else "男",
+            "name": patient.name,
+            "gender": patient.gender,
             "age": age,
-            "blood_type": patient.blood_type if patient else "A型",
-            "height": patient.height if patient else 174.0,
-            "weight": patient.weight if patient else 68.5,
-            "history": "慢性支气管炎病史5年，长期吸烟史（20支/日，30年），无药物过敏史。",
-            "symptoms": "间歇性干咳2周，偶有胸闷，无发热及咯血。",
+            "blood_type": patient.blood_type,
+            "height": patient.height,
+            "weight": patient.weight,
+            "history": clinical_history,
+            "symptoms": "",
         },
         "records": rec_list,
     }
 
 
 @router.get("/internal/patients/{patient_id}/segmentation_qc")
-def get_segmentation_qc_internal(patient_id: int, db: DB, study_id: Optional[str] = None):
+def get_segmentation_qc_internal(
+    patient_id: int,
+    db: DB,
+    user: CurrentUser,
+    study_id: str | None = None,
+):
     """Returns 3D segmented organ volumes and quality metrics."""
+    require_doctor(db, user)
+    check_patient_access(db, user, patient_id)
     models = db.scalars(select(OrganModel).where(OrganModel.patient_id == patient_id)).all()
     organ_models = [m for m in models if (m.kind or "organ") == "organ"]
     if study_id:

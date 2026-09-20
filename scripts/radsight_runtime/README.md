@@ -3,7 +3,7 @@
 Apple Silicon inference adapter for `talk_to_ct`.
 
 1. `bash scripts/radsight_runtime/setup_env.sh` — creates `.venv-radsight` and downloads `VL3-SigLIP-NaViT`.
-2. Weights stay at `$RADSIGHT_MODEL_PATH` (default `/Users/allenyuan/modilify_app/RadSight-8B`).
+2. Set `$RADSIGHT_MODEL_PATH` to the downloaded weights (the portable default is `$HOME/.cache/radsight/RadSight-8B`).
 3. `.venv-radsight/bin/python scripts/radsight_runtime/smoke_infer.py --ct /path/to/scan.nii.gz`
 4. Preview startup launches `scripts/radsight_service.py` on port 8001 with this interpreter.
 

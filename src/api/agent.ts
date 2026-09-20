@@ -83,6 +83,7 @@ export interface StreamChatParams {
   conversation_id: string
   patient_id: number
   message: string
+  locale?: 'zh' | 'en'
   active_study_id?: string
   active_series_id?: string
   active_slice?: number
@@ -125,6 +126,10 @@ export async function getAgentMessages(conversationId: string): Promise<AgentMes
   return json.data || []
 }
 
+export async function deleteAgentConversation(conversationId: string): Promise<void> {
+  await request(`/agent/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' })
+}
+
 export async function streamAgentChat(params: StreamChatParams, abortSignal?: AbortSignal): Promise<void> {
   const headers = new Headers({
     'Content-Type': 'application/json',
@@ -142,6 +147,7 @@ export async function streamAgentChat(params: StreamChatParams, abortSignal?: Ab
       conversation_id: params.conversation_id,
       patient_id: params.patient_id,
       message: params.message,
+      locale: params.locale,
       active_study_id: params.active_study_id,
       active_series_id: params.active_series_id,
       active_slice: params.active_slice,

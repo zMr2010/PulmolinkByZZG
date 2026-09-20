@@ -45,11 +45,11 @@ export class InteractionManager {
     this.physics.onError = message => this.events.error(message)
   }
 
-  async commitPredictedOpening(depthPercent: number) {
+  async commitPredictedOpening(depthPercent: number, openingPercent: number) {
     try {
       this.state.beginCut()
       this.events.modeChanged(this.state.mode)
-      const result = await this.cuts.commitPrediction(depthPercent)
+      const result = await this.cuts.commitPrediction(depthPercent, openingPercent)
       this.state.completePrediction()
       this.events.modeChanged(this.state.mode)
       this.events.predictedOpeningReady(result)
@@ -102,13 +102,17 @@ export class InteractionManager {
     if (!controlHit) return
     const control = controlHit.object as THREE.Mesh
     const mesh = control.userData.targetMesh as THREE.Mesh
+    const vertexIds = control.userData.vertexIds as number[] | undefined
+    const displayVertexId = Number(control.userData.vertexId)
+    if (!vertexIds?.length) return
     const world = control.getWorldPosition(new THREE.Vector3())
     const normal = this.scene.camera.getWorldDirection(new THREE.Vector3())
     this.dragPlane.setFromNormalAndCoplanarPoint(normal, world)
     this.dragControl = control
     this.dragMesh = mesh
-    const radius = Math.min(0.18, Math.max(0.04, mesh.geometry.boundingSphere?.radius ? mesh.geometry.boundingSphere.radius * 0.08 : 0.1))
-    this.physics.beginDrag(mesh, Number(control.userData.vertexId), radius)
+    const radius = Math.min(0.2, Math.max(0.07, mesh.geometry.boundingSphere?.radius ? mesh.geometry.boundingSphere.radius * 0.24 : 0.1))
+    this.cuts.selectWound(Number(control.userData.woundId))
+    this.physics.beginDrag(mesh, vertexIds, radius, displayVertexId)
     this.scene.setInteractionLocked(true)
     this.scene.renderer.domElement.setPointerCapture(event.pointerId)
     event.preventDefault()

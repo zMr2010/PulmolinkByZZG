@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173"]
     api_docs_enabled: bool = True
     max_upload_bytes: int = Field(default=512 * 1024 * 1024, ge=1024)
-    max_volume_voxels: int = Field(default=64_000_000, ge=8)
+    # 512 x 512 x 500 CT series are common (~131M voxels). Keep the voxel
+    # guard below the independent decoded-byte guard instead of rejecting them.
+    max_volume_voxels: int = Field(default=160_000_000, ge=8)
     max_uncompressed_bytes: int = Field(default=768 * 1024 * 1024, ge=1024)
     segmentation_callable: str | None = None
     segmentation_image_types: list[str] = ["CT", "MRI"]
@@ -62,7 +64,7 @@ class Settings(BaseSettings):
     agent_llm_api_key: SecretStr | None = None
     agent_llm_model: str = "gpt-4o"
     radsight_service_url: str = "http://127.0.0.1:8001"
-    radsight_model_path: str = "/Users/allenyuan/modilify_app/RadSight-8B"
+    radsight_model_path: str | None = None
 
     @model_validator(mode="after")
     def validate_secrets(self):

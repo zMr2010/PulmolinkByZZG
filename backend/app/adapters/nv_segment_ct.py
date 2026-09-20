@@ -223,6 +223,7 @@ class NVSegmentCT:
         output_dir: Path,
         progress,
         modality="CT_BODY",
+        label_ids: list[int] | None = None,
         **_kwargs,
     ):
         """Run one modality-aware all-label inference and persist one shared label map."""
@@ -233,7 +234,13 @@ class NVSegmentCT:
         output_dir.mkdir(exist_ok=True, parents=True)
         started = time.perf_counter()
         native_img = nib.load(str(image_path))
-        prep = self.pipeline.preprocess({"image": str(image_path), "modality": modality})
+        request = {"image": str(image_path)}
+        if label_ids:
+            request["label_prompt"] = [int(value) for value in label_ids]
+            logger.info("Running prompted NV-Segment-CTMR batch for labels %s", label_ids)
+        else:
+            request["modality"] = modality
+        prep = self.pipeline.preprocess(request)
         model_affine = prep["image"].affine[0].cpu().numpy()
         preprocess_s = time.perf_counter() - started
         progress(25)

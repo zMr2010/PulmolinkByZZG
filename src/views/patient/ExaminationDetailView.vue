@@ -42,7 +42,7 @@ watch(patientId, async (newId) => {
 <template>
   <div class="page">
     <button type="button" class="back-link" @click="router.push({ name: 'patient-examinations' })">
-      <ArrowLeft :size="16" /> {{ $t('My Examinations') }}
+      <ArrowLeft :size="16" /> {{ $t('ui.nav.myExaminations') }}
     </button>
 
     <section v-if="examination" class="exam-detail-grid">

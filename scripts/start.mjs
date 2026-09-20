@@ -113,6 +113,15 @@ function ensureLocalConfiguration() {
   }
 }
 
+function previewEndpoint(name, fallback) {
+  const portFile = join(root, '.cache', 'preview', `${name}-port`)
+  if (!existsSync(portFile)) return fallback
+  const port = Number.parseInt(readFileSync(portFile, 'utf8').trim(), 10)
+  return Number.isInteger(port) && port > 0 && port <= 65535
+    ? `http://127.0.0.1:${port}`
+    : fallback
+}
+
 async function backendIsHealthy(backend) {
   try {
     const response = await fetch(`${backend}/health`, { signal: AbortSignal.timeout(5000) })
@@ -142,23 +151,37 @@ if (frontendOnly) {
 
   const platformName = isWindows ? 'Windows' : (process.platform === 'darwin' ? 'macOS' : 'Linux')
   console.log(`Starting local PostgreSQL, FastAPI, and the frontend natively on ${platformName}...`)
-  const code = await runToCompletion(launcher, scriptArgs(startScript))
-  if (code !== 0) {
-    spawnSync(launcher, scriptArgs(stopScript), {
-      cwd: root,
-      env: process.env,
-      stdio: 'inherit',
-      windowsHide: true,
-    })
-    process.exit(code)
+  let localBackend = previewEndpoint('backend', 'http://127.0.0.1:8000')
+  let localFrontend = previewEndpoint('frontend', 'http://127.0.0.1:4173')
+  const previewRoot = join(root, '.cache', 'preview')
+  const hasManagedProcesses = existsSync(join(previewRoot, 'backend.pid'))
+    && existsSync(join(previewRoot, 'frontend.pid'))
+  const reuseManagedStack = hasManagedProcesses
+    && await backendIsHealthy(localBackend)
+    && await backendIsHealthy(localFrontend)
+  if (reuseManagedStack) {
+    console.log(`The managed full stack is already healthy at ${localFrontend}; attaching to it.`)
+  } else {
+    const code = await runToCompletion(launcher, scriptArgs(startScript))
+    if (code !== 0) {
+      spawnSync(launcher, scriptArgs(stopScript), {
+        cwd: root,
+        env: process.env,
+        stdio: 'inherit',
+        windowsHide: true,
+      })
+      process.exit(code)
+    }
+    localBackend = previewEndpoint('backend', 'http://127.0.0.1:8000')
+    localFrontend = previewEndpoint('frontend', 'http://127.0.0.1:4173')
   }
   // Ctrl+C is delivered to the console process tree and can interrupt
   // in-process cleanup. A detached guardian performs the same cleanup
   // after this launcher disappears, including when the terminal closes.
   startGuardian(stopScript)
-  const healthy = await backendIsHealthy('http://127.0.0.1:8000')
+  const healthy = await backendIsHealthy(localBackend)
   if (!healthy) {
-    console.error('The native launcher returned, but FastAPI is not healthy on port 8000.')
+    console.error(`The native launcher returned, but FastAPI is not healthy at ${localBackend}.`)
     spawnSync(launcher, scriptArgs(stopScript), {
       cwd: root,
       env: process.env,
@@ -167,7 +190,7 @@ if (frontendOnly) {
     })
     process.exit(1)
   }
-  console.log('Full stack is ready at http://127.0.0.1:4173. Press Ctrl+C to stop it.')
+  console.log(`Full stack is ready at ${localFrontend}. Press Ctrl+C to stop it.`)
   await new Promise(resolve => {
     // Signal listeners alone do not keep Node's event loop alive. Keep a
     // referenced timer until shutdown so pnpm start remains the foreground

@@ -6,7 +6,15 @@ from sqlalchemy import func, select
 from app.audit import audit
 from app.deps import DB, CurrentUser, check_patient_access, require_doctor
 from app.errors import APIError, Envelope, success
-from app.models import Doctor, MedicalImage, MedicalRecord, RecordAddendum, ReportTemplate, User, utcnow
+from app.models import (
+    Doctor,
+    MedicalImage,
+    MedicalRecord,
+    RecordAddendum,
+    ReportTemplate,
+    User,
+    utcnow,
+)
 from app.organs import require_organ
 from app.report_templates import template_out, validate_structured_data
 from app.schemas import (

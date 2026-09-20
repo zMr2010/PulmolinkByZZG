@@ -16,7 +16,7 @@
       "visualMesh": "/models/anatomy-navigation.glb", "physicsMesh": null,
       "nodeNames": ["body_shell"], "deformable": true, "visible": true,
       "physicsMode": "KINEMATIC",
-      "material": { "color": "#d9ab92", "opacity": 1.0, "roughness": 0.66, "doubleSided": true },
+      "material": { "color": "#d9ab92", "opacity": 1.0, "roughness": 0.66, "doubleSided": false },
       "metadata": { "role": "incision-surface", "visualResolution": "high", "cuttableThicknessMm": 18 }
     },
     {

@@ -7,7 +7,6 @@ from sqlalchemy import select
 from app.errors import APIError
 from app.models import ReportTemplate, ReportTemplateVersion, utcnow
 
-
 DEFAULT_REPORT_TEMPLATES = [
     {
         "id": "template_chest_ct",

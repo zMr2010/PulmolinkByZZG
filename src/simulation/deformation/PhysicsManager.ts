@@ -8,17 +8,14 @@ interface DeformedMessage {
   stepMs: number
 }
 
-interface SettledMessage {
-  type: 'settled'
-  generation: number
-}
-
 export class PhysicsManager {
   private worker?: Worker
   private mesh?: THREE.Mesh
   private generation = 0
   private target: [number, number, number] | null = null
   private ready = false
+  private targetDirty = false
+  private updateInFlight = false
   private onGeometryUpdated?: (mesh: THREE.Mesh) => void
   onError?: (message: string) => void
   onStep?: (milliseconds: number) => void
@@ -27,32 +24,52 @@ export class PhysicsManager {
     this.onGeometryUpdated = listener
   }
 
-  beginDrag(mesh: THREE.Mesh, vertexId: number, radius: number) {
+  beginDrag(mesh: THREE.Mesh, vertexIds: readonly number[], radius: number, displayVertexId = vertexIds[0]) {
     this.ensureWorker()
     this.generation++
     this.mesh = mesh
     this.ready = false
+    this.updateInFlight = false
     const position = mesh.geometry.getAttribute('position')
     const index = mesh.geometry.index
-    if (!index || vertexId >= position.count) throw new Error('Drag constraint references invalid mesh topology')
+    if (
+      !index
+      || !vertexIds.length
+      || vertexIds.some(vertexId => vertexId >= position.count)
+      || displayVertexId < 0
+      || displayVertexId >= position.count
+    ) {
+      throw new Error('Drag constraint references invalid mesh topology')
+    }
     const positions = new Float32Array(position.array)
     const indices = new Uint32Array(index.array)
-    this.target = [position.getX(vertexId), position.getY(vertexId), position.getZ(vertexId)]
+    const anchors = Uint32Array.from(vertexIds)
+    this.target = [
+      position.getX(displayVertexId),
+      position.getY(displayVertexId),
+      position.getZ(displayVertexId),
+    ]
+    this.targetDirty = true
     this.worker?.postMessage({
       type: 'initialize', generation: this.generation,
-      positions: positions.buffer, indices: indices.buffer, anchor: vertexId, radius,
-    }, [positions.buffer, indices.buffer])
+      positions: positions.buffer, indices: indices.buffer, anchors: anchors.buffer,
+      origin: this.target, radius,
+    }, [positions.buffer, indices.buffer, anchors.buffer])
   }
 
   updateDrag(target: THREE.Vector3) {
     this.target = [target.x, target.y, target.z]
-    if (this.ready) this.postTarget()
+    this.targetDirty = true
+    this.postTarget()
   }
 
   endDrag() {
-    this.worker?.postMessage({ type: 'release', generation: this.generation })
+    this.worker?.postMessage({ type: 'hold', generation: this.generation })
     this.target = null
     this.ready = false
+    this.targetDirty = false
+    this.updateInFlight = false
+    this.mesh = undefined
   }
 
   dispose() {
@@ -65,13 +82,9 @@ export class PhysicsManager {
   private ensureWorker() {
     if (this.worker) return
     this.worker = new Worker(new URL('../workers/mesh.worker.ts', import.meta.url), { type: 'module' })
-    this.worker.onmessage = (event: MessageEvent<DeformedMessage | SettledMessage | { type: 'ready'; generation: number }>) => {
+    this.worker.onmessage = (event: MessageEvent<DeformedMessage | { type: 'ready'; generation: number }>) => {
       const message = event.data
       if (message.generation !== this.generation) return
-      if (message.type === 'settled') {
-        this.mesh = undefined
-        return
-      }
       if (message.type === 'ready') {
         this.ready = true
         this.postTarget()
@@ -92,6 +105,8 @@ export class PhysicsManager {
       refitBoundsTree(this.mesh.geometry)
       this.onGeometryUpdated?.(this.mesh)
       this.onStep?.(message.stepMs)
+      this.updateInFlight = false
+      this.postTarget()
     }
     this.worker.onerror = () => {
       this.onError?.('Mesh deformation worker crashed')
@@ -100,7 +115,9 @@ export class PhysicsManager {
   }
 
   private postTarget() {
-    if (!this.target || !this.ready) return
+    if (!this.target || !this.ready || !this.targetDirty || this.updateInFlight) return
+    this.targetDirty = false
+    this.updateInFlight = true
     this.worker?.postMessage({ type: 'update', generation: this.generation, target: this.target })
   }
 }

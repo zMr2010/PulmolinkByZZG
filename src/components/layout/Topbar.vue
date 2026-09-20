@@ -53,24 +53,26 @@ onMounted(async () => {
 
 const pageTitles: Record<string, string> = {
   'doctor-dashboard': 'Patient Workspace',
+  'doctor-agent': 'ui.agent.workspaceTitle',
   'doctor-admin-users': 'ui.adminUsers.title',
   'doctor-admin-access': 'ui.patientAccess.title',
   'doctor-admin-stats': 'ui.adminStats.title',
   'doctor-archived': 'ui.archive.title',
   'doctor-patients': 'Patient Workspace',
   'doctor-patient-overview': 'Patient Record',
-  'doctor-patient-imaging': 'Medical Imaging',
+  'doctor-patient-imaging': 'ui.nav.medicalImaging',
   'doctor-patient-ai': 'ui.sidebar.aiDiagnosis',
   'doctor-patient-report': 'Doctor Report',
   'doctor-patient-3d': 'Digital Human',
+  'doctor-patient-anatomy': 'ui.anatomyViewer.title',
   'doctor-patient-simulation': 'Surgery Simulation',
-  'patient-dashboard': 'My Health',
+  'patient-dashboard': 'ui.nav.myHealth',
   'patient-onboarding': 'ui.onboarding.title',
-  'patient-examinations': 'My Examinations',
-  'patient-examination-detail': 'Examination Detail',
-  'patient-reports': 'My Reports',
+  'patient-examinations': 'ui.nav.myExaminations',
+  'patient-examination-detail': 'ui.nav.examinationDetail',
+  'patient-reports': 'ui.nav.myReports',
   'patient-body': 'My Body',
-  'patient-ai': 'AI Assistant',
+  'patient-ai': 'ui.nav.aiAssistant',
 }
 
 const title = computed(() => route.path.endsWith('/profile') ? 'ui.profile.title' : pageTitles[String(route.name)] ?? 'PulmoLink')

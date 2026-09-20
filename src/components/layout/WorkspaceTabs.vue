@@ -5,6 +5,8 @@ import { X } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkspaceTabsStore } from '@/stores/workspaceTabs'
 import { useReportDraftStore } from '@/stores/reportDrafts'
+import type { WorkspaceTab } from '@/stores/workspaceTabs'
+import { routeWorkspaceTabKey } from '@/router/workspaceTabs'
 import { t } from '@/i18n'
 
 const auth = useAuthStore()
@@ -13,28 +15,12 @@ const router = useRouter()
 const workspace = useWorkspaceTabsStore()
 const drafts = useReportDraftStore()
 const visibleTabs = computed(() => workspace.tabs.filter(tab => tab.portal === auth.portal))
+const activeKey = computed(() => routeWorkspaceTabKey(route, auth.portal))
 const tabButtons = ref<HTMLButtonElement[]>([])
-const legacyTitles: Record<string, string> = {
-  '患者工作台': 'Patient Workspace',
-  '患者概览': 'Overview',
-  '医学影像': 'Medical Imaging',
-  'AI 辅助诊断': 'AI Findings',
-  '临床报告': 'Doctor Report',
-  '3D 影像': '3D Viewer',
-  '我的健康': 'My Health',
-  '我的检查': 'My Examinations',
-  '检查详情': 'Examination Detail',
-  '我的报告': 'My Reports',
-  '我的身体': 'My Body',
-  'AI 助手': 'AI Assistant',
-  '个人资料': 'ui.topbar.profile',
-}
 
-function displayTitle(title: string) {
-  const separator = title.lastIndexOf(' · ')
-  const prefix = separator >= 0 ? title.slice(0, separator + 3) : ''
-  const base = separator >= 0 ? title.slice(separator + 3) : title
-  return prefix + t(legacyTitles[base] || base)
+function displayTitle(tab: WorkspaceTab) {
+  const translated = t(tab.titleKey, tab.titleParams)
+  return tab.titleParams.patient ? `${tab.titleParams.patient} · ${translated}` : translated
 }
 
 function setTabButton(element: unknown, index: number) {
@@ -56,9 +42,9 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
   event.preventDefault()
 }
 
-async function closeTab(id: string) {
-  const active = route.fullPath === id
-  const index = workspace.closeTab(id)
+async function closeTab(key: string) {
+  const active = activeKey.value === key
+  const index = workspace.closeTab(key)
   if (!active) return
   const remaining = visibleTabs.value
   const next = remaining[Math.min(Math.max(index, 0), remaining.length - 1)]
@@ -72,15 +58,15 @@ async function closeTab(id: string) {
   <div class="workspace-tabs" role="group" :aria-label="$t('ui.shell.openTabs')">
     <div
       v-for="tab in visibleTabs"
-      :key="tab.id"
+      :key="tab.key"
       class="workspace-tab"
-      :class="{ active: route.fullPath === tab.id, dirty: drafts.hasDirtyPath(tab.path) }"
-      :title="displayTitle(tab.title)"
+      :class="{ active: activeKey === tab.key, dirty: drafts.hasDirtyPath(tab.path) }"
+      :title="displayTitle(tab)"
     >
-      <button :ref="element => setTabButton(element, visibleTabs.findIndex(item => item.id === tab.id))" class="tab-main" type="button" :tabindex="route.fullPath === tab.id ? 0 : -1" :aria-current="route.fullPath === tab.id ? 'page' : undefined" @keydown="onTabKeydown($event, visibleTabs.findIndex(item => item.id === tab.id))" @click="router.push(tab.path)">
-        <span>{{ displayTitle(tab.title) }}<i v-if="drafts.hasDirtyPath(tab.path)" :aria-label="$t('ui.shell.unsavedDraft')">●</i></span>
+      <button :ref="element => setTabButton(element, visibleTabs.findIndex(item => item.key === tab.key))" class="tab-main" type="button" :tabindex="activeKey === tab.key ? 0 : -1" :aria-current="activeKey === tab.key ? 'page' : undefined" @keydown="onTabKeydown($event, visibleTabs.findIndex(item => item.key === tab.key))" @click="router.push(tab.path)">
+        <span>{{ displayTitle(tab) }}<i v-if="drafts.hasDirtyPath(tab.path)" :aria-label="$t('ui.shell.unsavedDraft')">●</i></span>
       </button>
-      <button class="tab-close" type="button" :aria-label="$t('ui.shell.closeTab', { title: displayTitle(tab.title) })" @click="closeTab(tab.id)">
+      <button class="tab-close" type="button" :aria-label="$t('ui.shell.closeTab', { title: displayTitle(tab) })" @click="closeTab(tab.key)">
         <X :size="13" />
       </button>
     </div>

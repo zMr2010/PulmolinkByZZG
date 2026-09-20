@@ -27,6 +27,8 @@
     "test:bundle-budget": "node scripts/verify-bundle-budget.mjs",
     "test:performance": "node scripts/measure-performance.mjs",
     "test:simulation": "vitest run src/simulation",
+    "test:uploads": "vitest run src/utils/nifti.test.ts",
+    "test:workspace-tabs": "vitest run src/stores/workspaceTabs.test.ts",
     "test:migrations": "node scripts/verify-migrations.mjs",
     "test:backend": "uv run --project backend pytest backend/tests -q",
     "contract:generate": "node scripts/generate-contract.mjs",

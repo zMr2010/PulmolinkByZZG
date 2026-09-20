@@ -46,7 +46,7 @@ const currentPatient = computed(() => patients.patients.find(patient => patient.
 const isAdmin = computed(() => auth.session?.accountRole === 'admin')
 const clinicalItems = computed(() => currentPatientId.value ? [
   { label: 'ui.sidebar.patientOverview', name: 'doctor-patient-overview', icon: ClipboardList },
-  { label: 'Medical Imaging', name: 'doctor-patient-imaging', icon: ScanLine },
+  { label: 'ui.nav.medicalImaging', name: 'doctor-patient-imaging', icon: ScanLine },
   { label: 'ui.sidebar.aiDiagnosis', name: 'doctor-patient-ai', icon: Sparkles },
   { label: 'ui.sidebar.clinicalReport', name: 'doctor-patient-report', icon: FileText },
   { label: 'ui.sidebar.organ3d', name: 'doctor-patient-3d', icon: Box },
@@ -54,11 +54,11 @@ const clinicalItems = computed(() => currentPatientId.value ? [
 
 const patientNav = computed(() => [
   { label: 'Home', to: '/patient/dashboard', icon: Home },
-  { label: 'My Health', to: '/patient/dashboard', icon: HeartPulse },
-  { label: 'My Examinations', to: '/patient/examinations', icon: Stethoscope },
-  { label: 'My Reports', to: '/patient/reports', icon: FileText },
+  { label: 'ui.nav.myHealth', to: '/patient/dashboard', icon: HeartPulse },
+  { label: 'ui.nav.myExaminations', to: '/patient/examinations', icon: Stethoscope },
+  { label: 'ui.nav.myReports', to: '/patient/reports', icon: FileText },
   { label: 'My Body', to: '/patient/body', icon: Box },
-  { label: 'AI Assistant', to: '/patient/assistant', icon: Sparkles },
+  { label: 'ui.nav.aiAssistant', to: '/patient/assistant', icon: Sparkles },
 ])
 
 watch(managementExpanded, value => localStorage.setItem('pulmolink-nav-patients', String(value)))
@@ -114,6 +114,9 @@ async function logout() {
         <div v-if="managementExpanded" class="tree-children">
           <RouterLink to="/doctor/dashboard" class="tree-item" active-class="is-active" @click="emit('close')">
             <LayoutDashboard :size="16" /><span>{{ $t('ui.sidebar.patientWorkspace') }}</span>
+          </RouterLink>
+          <RouterLink :to="{ name: 'doctor-agent', query: currentPatientId ? { patientId: currentPatientId } : {} }" class="tree-item" active-class="is-active" @click="emit('close')">
+            <Sparkles :size="16" /><span>{{ $t('ui.agent.workspaceTitle') }}</span>
           </RouterLink>
         </div>
       </section>

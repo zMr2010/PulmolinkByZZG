@@ -8,6 +8,7 @@ import { localPreview } from '@/utils/runtime'
 import LocalStudyUpload from './LocalStudyUpload.vue'
 import { dateFromFilename, localCalendarDate } from '@/utils/dates'
 import { t } from '@/i18n'
+import { isNiftiFileName, NIFTI_FILE_ACCEPT } from '@/utils/nifti'
 
 interface UploadEntry {
   id: string
@@ -52,8 +53,8 @@ function inferredDate(file: File) {
 
 function addFiles(files: File[]) {
   error.value = ''
-  const accepted = files.filter(file => /\.nii(?:\.gz)?$/i.test(file.name))
-  const rejected = files.filter(file => !/\.nii(?:\.gz)?$/i.test(file.name))
+  const accepted = files.filter(file => isNiftiFileName(file.name))
+  const rejected = files.filter(file => !isNiftiFileName(file.name))
   if (rejected.length) error.value = t('ui.upload.rejectedFiles', { names: rejected.map(file => file.name).join(', ') })
   const known = new Set(entries.value.map(entry => entry.id))
   const additions = accepted
@@ -190,7 +191,7 @@ async function uploadAll(retryOnly = false) {
     >
       <Upload :size="19" />
       <span><strong>{{ $t(dragging ? 'ui.upload.dropReady' : 'ui.upload.dropFiles') }}</strong><small>{{ $t('ui.upload.clickToAdd') }}</small></span>
-      <input ref="fileInput" type="file" accept=".nii,.nii.gz" multiple :disabled="busy" @change="selectFiles" />
+      <input ref="fileInput" type="file" :accept="NIFTI_FILE_ACCEPT" multiple :disabled="busy" @change="selectFiles" />
     </label>
     <p v-if="entries.length" class="file-count" role="status">{{ $t('ui.upload.selectedCount', { count: entries.length }) }}</p>
     <div v-if="entries.length" class="upload-queue">

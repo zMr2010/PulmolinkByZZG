@@ -13,21 +13,9 @@ RADSIGHT_PORT="${VMRB_RADSIGHT_PORT:-8001}"
 POSTGRES_BIN="${VMRB_POSTGRES_BIN:-}"
 NV_SEGMENT_DIR="${NV_SEGMENT_CT_DIR:-}"
 SKIP_NV_SEGMENT_SETUP="${VMRB_SKIP_NV_SEGMENT_SETUP:-}"
-if [[ -z "$NV_SEGMENT_DIR" ]]; then
-  for candidate in "$HOME/NV-Segment-CTMR" "$HOME/NV-segment-CTMR" "/Users/allenyuan/NV-Segment-CTMR"; do
-    if [[ -d "$candidate" ]]; then
-      NV_SEGMENT_DIR="$candidate"
-      break
-    fi
-  done
-fi
-if [[ -z "$SKIP_NV_SEGMENT_SETUP" ]]; then
-  if [[ -n "$NV_SEGMENT_DIR" && -f "$NV_SEGMENT_DIR/hugging_face_pipeline.py" && -f "$NV_SEGMENT_DIR/vista3d_pretrained_model/model.pt" ]]; then
-    SKIP_NV_SEGMENT_SETUP="0"
-  else
-    SKIP_NV_SEGMENT_SETUP="1"
-  fi
-fi
+ENABLE_NV_SEGMENT="${VMRB_ENABLE_NV_SEGMENT:-0}"
+if [[ -n "$NV_SEGMENT_DIR" ]]; then ENABLE_NV_SEGMENT="1"; fi
+if [[ "$SKIP_NV_SEGMENT_SETUP" == "1" ]]; then ENABLE_NV_SEGMENT="0"; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -37,11 +25,12 @@ FRONTEND_ROOT="$PROJECT_ROOT"
 CLUSTER_ROOT="$PREVIEW_ROOT/postgres"
 PYTHON_BIN="$BACKEND_ROOT/.venv/bin/python"
 RADSIGHT_PYTHON="${RADSIGHT_PYTHON:-$PROJECT_ROOT/.venv-radsight/bin/python}"
-RADSIGHT_MODEL_PATH="${RADSIGHT_MODEL_PATH:-/Users/allenyuan/modilify_app/RadSight-8B}"
-RADSIGHT_VISION_ENCODER_PATH="${RADSIGHT_VISION_ENCODER_PATH:-/Users/allenyuan/modilify_app/VL3-SigLIP-NaViT}"
+RADSIGHT_MODEL_PATH="${RADSIGHT_MODEL_PATH:-$HOME/.cache/radsight/RadSight-8B}"
+RADSIGHT_VISION_ENCODER_PATH="${RADSIGHT_VISION_ENCODER_PATH:-$HOME/.cache/radsight/VL3-SigLIP-NaViT}"
 RADSIGHT_QUANT="${RADSIGHT_QUANT:-int8}"
 RADSIGHT_DEVICE="${RADSIGHT_DEVICE:-mps}"
 RADSIGHT_ALLOW_STUB="${RADSIGHT_ALLOW_STUB:-0}"
+ENABLE_RADSIGHT="${VMRB_ENABLE_RADSIGHT:-0}"
 
 mkdir -p "$PREVIEW_ROOT"
 
@@ -123,14 +112,18 @@ if [[ ! -f "$VITE_ENTRY" ]]; then
 fi
 
 # NV-Segment setup
-if [[ "$SKIP_NV_SEGMENT_SETUP" != "1" && -n "$NV_SEGMENT_DIR" && -d "$NV_SEGMENT_DIR" ]]; then
+if [[ "$ENABLE_NV_SEGMENT" == "1" && -n "$NV_SEGMENT_DIR" && -d "$NV_SEGMENT_DIR" ]]; then
   MODEL_HELPER="$NV_SEGMENT_DIR/hugging_face_pipeline.py"
   MODEL_WEIGHTS="$NV_SEGMENT_DIR/vista3d_pretrained_model/model.pt"
   if [[ -f "$MODEL_HELPER" && -f "$MODEL_WEIGHTS" ]]; then
     if ! "$PYTHON_BIN" -c "import monai, torch, transformers" >/dev/null 2>&1; then
-      UV_BIN="$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")"
-      echo "Installing NV-Segment-CTMR runtime dependencies (using mirror acceleration)..."
-      UV_INDEX_URL="${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}" "$UV_BIN" pip install --python "$PYTHON_BIN" -r "$BACKEND_ROOT/requirements-nv.txt"
+      if [[ "${VMRB_INSTALL_NV_RUNTIME:-0}" == "1" ]]; then
+        UV_BIN="$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")"
+        echo "Installing NV-Segment-CTMR runtime dependencies (explicitly requested)..."
+        "$UV_BIN" pip install --python "$PYTHON_BIN" -r "$BACKEND_ROOT/requirements-nv.txt"
+      else
+        echo "Warning: NV-Segment-CTMR dependencies are missing; segmentation stays unavailable. Set VMRB_INSTALL_NV_RUNTIME=1 for the one-time install."
+      fi
     fi
     export NV_SEGMENT_CT_DIR="$NV_SEGMENT_DIR"
     if [[ -z "${NV_SEGMENT_DEVICE:-}" ]]; then
@@ -287,6 +280,7 @@ export DATABASE_URL="postgresql+psycopg://vmrb:${PREVIEW_PASSWORD}@127.0.0.1:${D
 
 export DATABASE_URL="postgresql+psycopg://vmrb:${PREVIEW_PASSWORD}@127.0.0.1:${DATABASE_PORT}/vmrb_preview"
 export STORAGE_ROOT="$PREVIEW_ROOT/medical-data"
+export BACKEND_INTERNAL_URL="http://127.0.0.1:$BACKEND_PORT"
 mkdir -p "$STORAGE_ROOT"
 
 # Ensure local environment files (.env and backend/.env) exist
@@ -351,19 +345,23 @@ if (( backend_ready == 0 )); then
 fi
 
 # Start RadSight-8B multimodal microservice
-if [[ ! -x "$RADSIGHT_PYTHON" ]]; then
-  echo "RadSight venv missing at $RADSIGHT_PYTHON"
-  echo "Creating Apple Silicon inference environment (first run can take several minutes)..."
-  bash "$SCRIPT_DIR/radsight_runtime/setup_env.sh"
-fi
-if [[ ! -x "$RADSIGHT_PYTHON" ]]; then
-  echo "Error: RadSight Python interpreter not found ($RADSIGHT_PYTHON)."
-  echo "Run scripts/radsight_runtime/setup_env.sh first."
-  exit 1
-fi
+if [[ "$ENABLE_RADSIGHT" == "1" ]]; then
+  if [[ ! -x "$RADSIGHT_PYTHON" ]]; then
+    if [[ "${VMRB_INSTALL_RADSIGHT_RUNTIME:-0}" == "1" ]]; then
+      echo "Creating the optional RadSight inference environment..."
+      bash "$SCRIPT_DIR/radsight_runtime/setup_env.sh"
+    else
+      echo "Error: RadSight runtime is missing. Set VMRB_INSTALL_RADSIGHT_RUNTIME=1 for the one-time install."
+      exit 1
+    fi
+  fi
+  if [[ ! -d "$RADSIGHT_MODEL_PATH" ]]; then
+    echo "Error: RadSight weights were not found at $RADSIGHT_MODEL_PATH. Set RADSIGHT_MODEL_PATH."
+    exit 1
+  fi
 
-echo "Starting RadSight-8B multimodal microservice on port $RADSIGHT_PORT..."
-"$PYTHON_BIN" -c "
+  echo "Starting RadSight-8B multimodal microservice on port $RADSIGHT_PORT..."
+  "$PYTHON_BIN" -c "
 import os, subprocess
 out = open('$PREVIEW_ROOT/radsight.log', 'w')
 err = open('$PREVIEW_ROOT/radsight-error.log', 'w')
@@ -389,22 +387,25 @@ with open('$PREVIEW_ROOT/radsight.pid', 'w') as f:
     f.write(str(p.pid))
 "
 
-radsight_up=0
-for _ in {1..50}; do
-  health="$(curl -fsS "http://127.0.0.1:$RADSIGHT_PORT/health" 2>/dev/null || true)"
-  if echo "$health" | grep -Eq '"status":"(loading|ready)"'; then
-    radsight_up=1
-    if echo "$health" | grep -q '"status":"ready"'; then
-      echo "RadSight-8B microservice is ready on port $RADSIGHT_PORT."
-    else
-      echo "RadSight-8B microservice is loading weights on port $RADSIGHT_PORT."
+  radsight_up=0
+  for _ in {1..50}; do
+    health="$(curl -fsS "http://127.0.0.1:$RADSIGHT_PORT/health" 2>/dev/null || true)"
+    if echo "$health" | grep -Eq '"status":"(loading|ready)"'; then
+      radsight_up=1
+      if echo "$health" | grep -q '"status":"ready"'; then
+        echo "RadSight-8B microservice is ready on port $RADSIGHT_PORT."
+      else
+        echo "RadSight-8B microservice is loading weights on port $RADSIGHT_PORT."
+      fi
+      break
     fi
-    break
+    sleep 0.2
+  done
+  if (( radsight_up == 0 )); then
+    echo "Warning: RadSight health endpoint did not respond; inspect $PREVIEW_ROOT/radsight-error.log"
   fi
-  sleep 0.2
-done
-if (( radsight_up == 0 )); then
-  echo "Warning: RadSight health endpoint did not respond; inspect $PREVIEW_ROOT/radsight-error.log"
+else
+  echo "RadSight startup skipped; set VMRB_ENABLE_RADSIGHT=1 after installing local weights to enable it."
 fi
 
 # Start frontend

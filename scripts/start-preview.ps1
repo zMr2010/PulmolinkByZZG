@@ -27,6 +27,41 @@ function Test-NativeCommand {
   }
 }
 
+function Test-TcpPortInUse {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int]$Port
+  )
+
+  return $null -ne (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+    Select-Object -First 1)
+}
+
+function Assert-PreviewPidAvailable {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PidPath,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedCommand,
+    [Parameter(Mandatory = $true)]
+    [int]$Port
+  )
+
+  if (-not (Test-Path -LiteralPath $PidPath)) { return }
+  $storedPid = 0
+  $validPid = [int]::TryParse((Get-Content -LiteralPath $PidPath -Raw).Trim(), [ref]$storedPid)
+  $processInfo = if ($validPid) {
+    Get-CimInstance Win32_Process -Filter "ProcessId=$storedPid" -ErrorAction SilentlyContinue
+  } else { $null }
+  if ($processInfo -and $processInfo.CommandLine -and $processInfo.CommandLine.Contains($ExpectedCommand)) {
+    throw "Preview process already running on port $Port. Use scripts/stop-preview.ps1 before restarting."
+  }
+
+  # The process exited or Windows reused its PID. Removing only this launcher's
+  # bookkeeping file is safe and lets a crashed preview restart normally.
+  Remove-Item -LiteralPath $PidPath
+}
+
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $previewRoot = Join-Path $projectRoot '.cache\preview'
 $backendRoot = Join-Path $projectRoot 'backend'
@@ -43,10 +78,14 @@ if (-not (Test-Path -LiteralPath $pythonExe)) {
   }
 }
 $skipNvSegmentSetup = $env:VMRB_SKIP_NV_SEGMENT_SETUP -eq '1'
-if (-not $skipNvSegmentSetup -and -not $NvSegmentDir -and (Test-Path -LiteralPath 'D:\NV-Segment-CTMR')) {
+$enableNvSegment = -not $skipNvSegmentSetup -and ($env:VMRB_ENABLE_NV_SEGMENT -eq '1' -or [bool]$NvSegmentDir)
+if ($env:VMRB_ENABLE_NV_SEGMENT -eq '1' -and -not $NvSegmentDir -and (Test-Path -LiteralPath 'D:\NV-Segment-CTMR')) {
   $NvSegmentDir = 'D:\NV-Segment-CTMR'
 }
-if (-not $skipNvSegmentSetup -and $NvSegmentDir) {
+if ($enableNvSegment -and -not $NvSegmentDir) {
+  throw 'VMRB_ENABLE_NV_SEGMENT=1 requires NV_SEGMENT_CT_DIR (or D:\NV-Segment-CTMR).'
+}
+if ($enableNvSegment -and $NvSegmentDir) {
   $resolvedNvSegmentDir = (Resolve-Path -LiteralPath $NvSegmentDir -ErrorAction Stop).Path
   $modelHelper = Join-Path $resolvedNvSegmentDir 'hugging_face_pipeline.py'
   $modelWeights = Join-Path $resolvedNvSegmentDir 'vista3d_pretrained_model\model.pt'
@@ -58,10 +97,14 @@ if (-not $skipNvSegmentSetup -and $NvSegmentDir) {
     'import monai, torch, transformers'
   )
   if (-not $nvRuntimeReady) {
-    if (-not $uv) { throw 'Install uv so the NV-Segment-CTMR runtime dependencies can be installed.' }
-    Write-Output 'Installing NV-Segment-CTMR runtime dependencies (first launch only)...'
-    & $uv.Source pip install --python $pythonExe -r (Join-Path $backendRoot 'requirements-nv.txt')
-    if ($LASTEXITCODE -ne 0) { throw 'NV-Segment-CTMR runtime dependency installation failed.' }
+    if ($env:VMRB_INSTALL_NV_RUNTIME -eq '1') {
+      if (-not $uv) { throw 'Install uv so the NV-Segment-CTMR runtime dependencies can be installed.' }
+      Write-Output 'Installing NV-Segment-CTMR runtime dependencies (explicitly requested)...'
+      & $uv.Source pip install --python $pythonExe -r (Join-Path $backendRoot 'requirements-nv.txt')
+      if ($LASTEXITCODE -ne 0) { throw 'NV-Segment-CTMR runtime dependency installation failed.' }
+    } else {
+      Write-Warning 'NV-Segment-CTMR dependencies are missing. The app will start, but segmentation stays unavailable. Set VMRB_INSTALL_NV_RUNTIME=1 for the one-time install.'
+    }
   }
   $env:NV_SEGMENT_CT_DIR = $resolvedNvSegmentDir
   $env:NV_SEGMENT_DEVICE = if ($env:NV_SEGMENT_DEVICE) { $env:NV_SEGMENT_DEVICE } else { 'cuda:0' }
@@ -100,24 +143,40 @@ $postgresRunning = Test-NativeCommand -FilePath (Join-Path $PostgresBin 'pg_ctl.
   $clusterRoot,
   'status'
 )
-if (-not $postgresRunning) {
-  $pgArguments = @('-D', ('"' + $clusterRoot + '"'), '-l', ('"' + (Join-Path $previewRoot 'postgres.log') + '"'), '-o', ('"-h 127.0.0.1 -p ' + $DatabasePort + '"'), '-w', 'start')
-  Start-Process -FilePath (Join-Path $PostgresBin 'pg_ctl.exe') -ArgumentList $pgArguments -WindowStyle Hidden | Out-Null
-  $databaseReady = $false
-  for ($i = 0; $i -lt 40; $i++) {
-    $databaseReady = Test-NativeCommand -FilePath (Join-Path $PostgresBin 'pg_isready.exe') -ArgumentList @(
-      '-h',
-      '127.0.0.1',
-      '-p',
-      [string]$DatabasePort,
-      '-U',
-      'vmrb'
-    )
-    if ($databaseReady) { break }
-    Start-Sleep -Milliseconds 250
+$databasePortPath = Join-Path $previewRoot 'database-port'
+if ($postgresRunning) {
+  if (Test-Path -LiteralPath $databasePortPath) {
+    $DatabasePort = [int]((Get-Content -LiteralPath $databasePortPath -Raw).Trim())
+  } else {
+    $postmasterPidLines = Get-Content -LiteralPath (Join-Path $clusterRoot 'postmaster.pid')
+    if ($postmasterPidLines.Count -ge 4) { $DatabasePort = [int]$postmasterPidLines[3] }
   }
-  if (-not $databaseReady) { throw 'Preview database did not become ready; inspect .cache/preview/postgres.log.' }
+} else {
+  if (Test-TcpPortInUse -Port $DatabasePort) {
+    $availableDatabasePort = (($DatabasePort + 1)..($DatabasePort + 20) |
+      Where-Object { -not (Test-TcpPortInUse -Port $_) } |
+      Select-Object -First 1)
+    if (-not $availableDatabasePort) {
+      throw "PostgreSQL ports $DatabasePort-$($DatabasePort + 20) are already in use."
+    }
+    Write-Output "Database port $DatabasePort is occupied; using $availableDatabasePort for this checkout."
+    $DatabasePort = $availableDatabasePort
+  }
+  $DatabasePort | Set-Content -LiteralPath $databasePortPath
+  & (Join-Path $PostgresBin 'pg_ctl.exe') -D $clusterRoot -l (Join-Path $previewRoot 'postgres.log') -o "-h 127.0.0.1 -p $DatabasePort" -w start
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Preview database failed to start; inspect .cache/preview/postgres.log.'
+  }
 }
+$databaseReady = Test-NativeCommand -FilePath (Join-Path $PostgresBin 'pg_isready.exe') -ArgumentList @(
+  '-h',
+  '127.0.0.1',
+  '-p',
+  [string]$DatabasePort,
+  '-U',
+  'vmrb'
+)
+if (-not $databaseReady) { throw 'Preview database did not become ready; inspect .cache/preview/postgres.log.' }
 $previewPassword = (Get-Content -LiteralPath $passwordFile -Raw).Trim()
 $env:DATABASE_URL = 'postgresql+psycopg://vmrb:' + $previewPassword + '@127.0.0.1:' + $DatabasePort + '/postgres'
 & $pythonExe -c "import os; from sqlalchemy import create_engine,text; e=create_engine(os.environ['DATABASE_URL'],isolation_level='AUTOCOMMIT'); c=e.connect(); exists=c.execute(text('SELECT 1 FROM pg_database WHERE datname=:name'),{'name':'vmrb_preview'}).scalar(); c.execute(text('CREATE DATABASE vmrb_preview')) if not exists else None; c.close(); e.dispose()"
@@ -134,13 +193,28 @@ try {
 } finally { Pop-Location }
 $backendPidPath = Join-Path $previewRoot 'backend.pid'
 $frontendPidPath = Join-Path $previewRoot 'frontend.pid'
-foreach ($entry in @(@($backendPidPath, $BackendPort), @($frontendPidPath, $FrontendPort))) {
-  if (Test-Path -LiteralPath $entry[0]) {
-    $previous = Get-Process -Id ([int](Get-Content -LiteralPath $entry[0])) -ErrorAction SilentlyContinue
-    if ($previous) { throw "Preview process already running on port $($entry[1]). Use scripts/stop-preview.ps1 before restarting." }
-  }
+Assert-PreviewPidAvailable -PidPath $backendPidPath -ExpectedCommand 'app.main:create_app' -Port $BackendPort
+Assert-PreviewPidAvailable -PidPath $frontendPidPath -ExpectedCommand 'node_modules\vite\bin\vite.js' -Port $FrontendPort
+if (Test-TcpPortInUse -Port $BackendPort) {
+  $availableBackendPort = (($BackendPort + 1)..($BackendPort + 20) |
+    Where-Object { -not (Test-TcpPortInUse -Port $_) } |
+    Select-Object -First 1)
+  if (-not $availableBackendPort) { throw "Backend ports $BackendPort-$($BackendPort + 20) are already in use." }
+  Write-Output "Backend port $BackendPort is occupied; using $availableBackendPort for this checkout."
+  $BackendPort = $availableBackendPort
 }
+if (Test-TcpPortInUse -Port $FrontendPort) {
+  $availableFrontendPort = (($FrontendPort + 1)..($FrontendPort + 20) |
+    Where-Object { -not (Test-TcpPortInUse -Port $_) } |
+    Select-Object -First 1)
+  if (-not $availableFrontendPort) { throw "Frontend ports $FrontendPort-$($FrontendPort + 20) are already in use." }
+  Write-Output "Frontend port $FrontendPort is occupied; using $availableFrontendPort for this checkout."
+  $FrontendPort = $availableFrontendPort
+}
+$BackendPort | Set-Content -LiteralPath (Join-Path $previewRoot 'backend-port')
+$FrontendPort | Set-Content -LiteralPath (Join-Path $previewRoot 'frontend-port')
 $backendArgs = @('-m', 'uvicorn', 'app.main:create_app', '--factory', '--host', '127.0.0.1', '--port', $BackendPort, '--workers', '1', '--no-access-log')
+$env:BACKEND_INTERNAL_URL = 'http://127.0.0.1:' + $BackendPort
 $backendProcess = Start-Process -FilePath $pythonExe -ArgumentList $backendArgs -WorkingDirectory $backendRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $previewRoot 'backend.log') -RedirectStandardError (Join-Path $previewRoot 'backend-error.log')
 $backendProcess.Id | Set-Content -LiteralPath $backendPidPath
 $env:VITE_LOCAL_PREVIEW = 'false'

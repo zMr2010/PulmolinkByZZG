@@ -7,6 +7,7 @@ import { analyzeDicomFiles, detectModalityFromFiles, isRasterFile, isSupportedFi
 import type { Examination, ExaminationType } from '@/types'
 import { localCalendarDate } from '@/utils/dates'
 import { t } from '@/i18n'
+import { isNiftiFileName, NIFTI_FILE_ACCEPT } from '@/utils/nifti'
 
 const props = withDefaults(defineProps<{
   patientId: string
@@ -102,6 +103,10 @@ function addFiles(incoming: File[]) {
   if (busy.value) return
   error.value = ''
   notice.value = ''
+  if (incoming.some(file => isNiftiFileName(file.name))) {
+    error.value = t('ui.upload.niftiRequiresBackend')
+    return
+  }
   const supported = incoming.filter(file => isSupportedFile(file) && !/^DICOMDIR$/i.test(file.name))
   const ignored = incoming.filter(file => !supported.includes(file))
   if (ignored.length) {
@@ -257,7 +262,7 @@ async function importStudy() {
         <button type="button" class="btn btn-secondary btn-sm" :disabled="busy" @click="fileInput?.click()"><FileImage :size="14" /> {{ $t('Choose files') }}</button>
         <button type="button" class="btn btn-secondary btn-sm" :disabled="busy" @click="folderInput?.click()"><FolderOpen :size="14" /> {{ $t('ui.upload.chooseFolder') }}</button>
       </div>
-      <input ref="fileInput" class="hidden-file-input" type="file" accept=".dcm,application/dicom,image/png,image/jpeg,image/webp,image/bmp" multiple :disabled="busy" @change="selectFiles" />
+      <input ref="fileInput" class="hidden-file-input" type="file" :accept="`.dcm,application/dicom,image/png,image/jpeg,image/webp,image/bmp,${NIFTI_FILE_ACCEPT}`" multiple :disabled="busy" @change="selectFiles" />
       <input ref="folderInput" class="hidden-file-input" type="file" multiple webkitdirectory directory :disabled="busy" @change="selectFiles" />
     </div>
 

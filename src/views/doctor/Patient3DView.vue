@@ -19,11 +19,9 @@ const unavailableReason = computed(() => volumeStudies.value.length
   : t('ui.patient3d.noCt'))
 
 async function openViewer() {
-  const exam = reconstructableStudies.value[0]
   await router.push({
-    name: 'study-viewer',
-    params: { patientId: patientId.value },
-    query: exam ? { image: exam.id } : {},
+    name: 'doctor-patient-anatomy',
+    params: { id: patientId.value },
   })
 }
 

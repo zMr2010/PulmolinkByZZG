@@ -47,6 +47,7 @@ export const useSimulationStore = defineStore('simulation', () => {
   const topologyVersion = ref(1)
   const bodyOpacity = ref(0.3)
   const cutDepthPercent = ref(35)
+  const woundOpeningPercent = ref(45)
   const organVisibility = ref<Record<string, boolean>>({})
   const isolateSelected = ref(false)
   const debug = ref<SimulationDebugOptions>(defaultDebug())
@@ -93,7 +94,7 @@ export const useSimulationStore = defineStore('simulation', () => {
     currentCase, manifest, loadState, loadProgress, error, selectedOrgan,
     selectedPointA, selectedPointB, interactionMode, physicsEnabled, physicsMode,
     sessionId, connectionState, simulationStatus, topologyVersion,
-    bodyOpacity, cutDepthPercent, organVisibility, isolateSelected, debug, fps, physicsStepTime,
+    bodyOpacity, cutDepthPercent, woundOpeningPercent, organVisibility, isolateSelected, debug, fps, physicsStepTime,
     predictionError, sofaTickRate, networkRtt, sofaStepTime, structures,
     beginLoad, setManifest, setPoint, resetInteraction, fail,
   }

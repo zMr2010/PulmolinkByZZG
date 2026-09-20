@@ -20,6 +20,7 @@ assert.match(readme, /0018_merge_mri_and_v5/)
 assert.match(readme, /0019_reconcile_access_control/)
 assert.match(readme, /0020_structured_reporting/)
 assert.match(readme, /0021_admin_console/)
+assert.match(readme, /0022_merge_agent_and_admin_console/)
 assert.doesNotMatch(readme, /compose\.override\.yaml/)
 for (const file of ['compose.yaml', 'compose.infra.yaml', 'compose.gpu.yaml', 'backend/.env.example']) exists(file)
 const featureMatrix = read('docs/feature-matrix.md')
@@ -28,7 +29,7 @@ for (const mode of ['Synthetic demo', 'Local browser import', 'Real API']) {
 }
 
 const migrations = fs.readdirSync('backend/migrations/versions').filter(file => file.endsWith('.py')).sort()
-assert.equal(migrations.at(-1), '0021_admin_console.py')
+assert.equal(migrations.at(-1), '0022_merge_agent_and_admin_console.py')
 
 console.log(JSON.stringify({ passed: true, checks: [
   'documented development and backend ports match Vite proxy configuration',

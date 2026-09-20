@@ -16,9 +16,9 @@ from app.db import make_engine, make_session_factory
 from app.errors import APIError, success
 from app.report_templates import seed_default_report_templates
 from app.routers import (
+    admin,
     agent,
     ai,
-    admin,
     analysis,
     auth,
     dicom,
@@ -29,6 +29,7 @@ from app.routers import (
     records,
     report_templates,
     segmentation,
+    simulations,
     workflow,
 )
 from app.services.ai import AIProvider
@@ -50,7 +51,11 @@ class BodyLimitMiddleware:
             return await self.app(scope, receive, send)
         total = 0
         rejected = False
-        limit = self.max_bytes if (scope["path"].endswith("/medical-images") or scope["path"].endswith("/dicom/instances")) else 1024 * 1024
+        limit = self.max_bytes if (
+            scope["path"].endswith("/medical-images")
+            or scope["path"].endswith("/dicom/instances")
+            or scope["path"].endswith("/simulation-cases")
+        ) else 1024 * 1024
         if scope["path"] in {"/api/v1/auth/profile/files", "/api/v1/auth/profile/avatar"}:
             limit = 11 * 1024 * 1024
 
@@ -263,6 +268,7 @@ def create_app(
         report_templates.router,
         images.router,
         segmentation.router,
+        simulations.router,
         analysis.router,
         organ_models.router,
         ai.router,

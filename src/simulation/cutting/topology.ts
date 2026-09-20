@@ -285,7 +285,12 @@ function hasFoldovers(base: Float32Array, candidate: Float32Array, indices: Uint
     const baseArea = Math.hypot(...baseNormal)
     if (baseArea < 1e-10) continue
     const nextArea = Math.hypot(...nextNormal)
-    if (nextArea < baseArea * 0.04 || dot(baseNormal, nextNormal) <= 0) return true
+    // A large but valid deformation can rotate a surface normal beyond 90° in
+    // world space. Comparing the two normals therefore rejects ordinary shell
+    // bending and collapses the requested opening to a hairline. Reject only
+    // near-degenerate triangles here; orientation/topology are preserved by
+    // the indexed seam split itself.
+    if (nextArea < baseArea * 0.04) return true
   }
   return false
 }
@@ -363,8 +368,10 @@ export function openPredictedSeam(split: TopologySplit, maximumHalfWidth: number
   }
 
   const adjacency = adjacencyFor(split.indices, base.length / 3)
-  const left = diffuseBoundaryDisplacement(base, adjacency, split.leftBoundary, split.rightBoundary, leftTargets, 8)
-  const right = diffuseBoundaryDisplacement(base, adjacency, split.rightBoundary, split.leftBoundary, rightTargets, 8)
+  // A wider support region distributes strain through the surrounding skin
+  // instead of leaving a sharp, zipper-like ridge next to the seam.
+  const left = diffuseBoundaryDisplacement(base, adjacency, split.leftBoundary, split.rightBoundary, leftTargets, 16)
+  const right = diffuseBoundaryDisplacement(base, adjacency, split.rightBoundary, split.leftBoundary, rightTargets, 16)
   const displacement = new Float32Array(base.length)
   for (let id = 0; id < base.length / 3; id++) {
     const source = left.influence[id] >= right.influence[id] ? left : right

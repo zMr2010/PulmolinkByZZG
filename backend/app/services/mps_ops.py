@@ -10,8 +10,8 @@ via ``torch.ones`` / ``torch.tensor`` / ``Tensor.double``, not only ``Tensor.to`
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from functools import wraps
-from typing import Sequence
 
 logger = logging.getLogger(__name__)
 

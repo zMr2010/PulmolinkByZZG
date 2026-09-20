@@ -33,6 +33,7 @@ from app.services.mri_metadata import (
     suggested_mode,
 )
 from app.services.storage import relative_path, stored_path
+from app.services.uploads import stream_upload
 
 logger = logging.getLogger(__name__)
 
@@ -141,35 +142,35 @@ def upload_image(
     if study_date and study_date > date.today():
         raise APIError(400, 40010, "Study date cannot be in the future")
     filename = (file.filename or "").lower()
-    payload = file.file.read(settings.max_upload_bytes + 1)
-    file.file.close()
-    if len(payload) > settings.max_upload_bytes:
-        raise APIError(413, 41301, "Upload exceeds limit")
-    if not payload:
-        raise APIError(400, 40004, "Upload is empty")
     image_id = f"img_{uuid4().hex}"
     nifti_path = None
     source_format = "nifti"
     series_uid = None
     detected = {"sequence": "unknown", "contrast": None, "series_description": None}
     try:
-        looks_dicom = (
-            filename.endswith(".dcm")
-            or filename.endswith(".zip")
-            or payload[:2] == b"PK"
-            or (len(payload) > 132 and payload[128:132] == b"DICM")
-        )
         if filename.endswith(".nii.gz"):
             extension = ".nii.gz"
             nifti_path = stored_path(settings, f"medical-images/{image_id}{extension}")
-            nifti_path.parent.mkdir(parents=True, exist_ok=True)
-            nifti_path.write_bytes(payload)
+            stream_upload(file, nifti_path, settings.max_upload_bytes)
         elif filename.endswith(".nii"):
             extension = ".nii"
             nifti_path = stored_path(settings, f"medical-images/{image_id}{extension}")
-            nifti_path.parent.mkdir(parents=True, exist_ok=True)
-            nifti_path.write_bytes(payload)
-        elif looks_dicom:
+            stream_upload(file, nifti_path, settings.max_upload_bytes)
+        else:
+            payload = file.file.read(settings.max_upload_bytes + 1)
+            file.file.close()
+            if len(payload) > settings.max_upload_bytes:
+                raise APIError(413, 41301, "Upload exceeds limit")
+            if not payload:
+                raise APIError(400, 40004, "Upload is empty")
+            looks_dicom = (
+                filename.endswith(".dcm")
+                or filename.endswith(".zip")
+                or payload[:2] == b"PK"
+                or (len(payload) > 132 and payload[128:132] == b"DICM")
+            )
+            if not looks_dicom:
+                raise APIError(400, 40004, "Supported image formats: .nii, .nii.gz, .dcm, .zip")
             source_format = "dicom"
             files = collect_dicom_bytes(file.filename or "series.dcm", payload)
             datasets, detected = series_from_files(files)
@@ -183,8 +184,6 @@ def upload_image(
             dicom_dir.mkdir(parents=True, exist_ok=True)
             for index, (name, content) in enumerate(files):
                 (dicom_dir / f"{index:04d}_{Path(name).name}").write_bytes(content)
-        else:
-            raise APIError(400, 40004, "Supported image formats: .nii, .nii.gz, .dcm, .zip")
         volume, data = load_volume(nifti_path, settings)
         canonical = prepare_slice_cache(nifti_path, volume, data)
         acquisition = acquisition_from_volume(volume, data)

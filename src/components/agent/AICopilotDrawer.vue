@@ -9,6 +9,7 @@ import {
   listAgentConversations,
   createAgentConversation,
   getAgentMessages,
+  deleteAgentConversation,
   streamAgentChat,
   type AgentStatus,
   type AgentMessageItem,
@@ -18,11 +19,12 @@ import {
 } from '@/api/agent'
 import ReportCard from './ReportCard.vue'
 import TreatmentPlanCard from './TreatmentPlanCard.vue'
+import { locale, t } from '@/i18n'
 
 const route = useRoute()
 const auth = useAuthStore()
 const patients = usePatientStore()
-defineProps<{ open: boolean }>()
+withDefaults(defineProps<{ open: boolean; embedded?: boolean }>(), { embedded: false })
 const emit = defineEmits<{ close: []; openRecords: [] }>()
 
 // UI State
@@ -47,7 +49,7 @@ const currentPlan = ref<StructuredTreatmentPlan | null>(null)
 const selectedCTSeries = ref<string>('')
 
 type PreviewConversation = AgentConversationItem & { messages: AgentMessageItem[] }
-const patientScope = computed(() => String(route.params.id || patients.selectedPatientId || ''))
+const patientScope = computed(() => String(route.params.id || route.query.patientId || patients.selectedPatientId || ''))
 const previewKey = computed(() => `pulmolink-agent-history-v1:${auth.session?.username || 'anonymous'}:${patientScope.value || 'none'}`)
 
 function readPreviewConversations(): PreviewConversation[] {
@@ -108,12 +110,12 @@ const radsightReady = computed(() => {
 const radsightStatusLabel = computed(() => {
   if (radsightReady.value) {
     const quant = radsightDetails.value.quant || 'bf16'
-    return `RadSight-8B 已就绪 (${quant})`
+    return t('ui.copilot.status.ready', { quant })
   }
   const status = radsightDetails.value.status || statusInfo.value?.radsight_microservice?.status
-  if (status === 'loading') return 'RadSight-8B 权重加载中'
-  if (status === 'error' || status === 'unreachable') return 'RadSight-8B 未加载'
-  return 'RadSight-8B 未连接'
+  if (status === 'loading') return t('ui.copilot.status.loading')
+  if (status === 'error' || status === 'unreachable') return t('ui.copilot.status.unavailable')
+  return t('ui.copilot.status.disconnected')
 })
 
 const currentPatientId = computed<number>(() => {
@@ -127,6 +129,7 @@ const activeStudyId = computed<string>(() => {
 })
 
 const messagesContainer = ref<HTMLElement | null>(null)
+let streamController: AbortController | undefined
 
 function scrollToBottom() {
   nextTick(() => {
@@ -157,7 +160,7 @@ async function initConversations() {
       await loadMessages(list[0].id)
     }
   } catch (err) {
-    historyError.value = err instanceof Error ? err.message : '读取对话记录失败'
+    historyError.value = err instanceof Error ? err.message : t('ui.copilot.error.history')
   }
 }
 
@@ -182,7 +185,7 @@ async function startNewConversation(title: string): Promise<boolean> {
     if (localPreview) localStorage.setItem(previewKey.value, JSON.stringify([{ ...newConv, messages: [] }, ...readPreviewConversations()]))
     return true
   } catch (err) {
-    historyError.value = err instanceof Error ? err.message : '创建对话失败'
+    historyError.value = err instanceof Error ? err.message : t('ui.copilot.error.create')
     return false
   }
 }
@@ -195,7 +198,7 @@ async function loadMessages(convId: string) {
     messages.value = list
     scrollToBottom()
   } catch (err) {
-    historyError.value = err instanceof Error ? err.message : '读取消息失败'
+    historyError.value = err instanceof Error ? err.message : t('ui.copilot.error.messages')
   }
 }
 
@@ -216,7 +219,7 @@ async function handleSendMessage() {
   if (!text || isStreaming.value) return
 
   if (!localPreview && !currentPatientId.value) {
-    historyError.value = '请先打开患者档案，再开始影像会诊。'
+    historyError.value = t('ui.copilot.error.patientRequired')
     return
   }
 
@@ -249,7 +252,7 @@ async function handleSendMessage() {
       id: Date.now() + 1,
       conversation_id: activeConversationId.value,
       role: 'assistant',
-      content: '当前为本地演示。问题已保存到对话记录；连接临床后端后可运行影像与病历分析。',
+      content: t('ui.copilot.previewSaved'),
       tool_calls: [],
       created_at: new Date().toISOString(),
     })
@@ -260,10 +263,12 @@ async function handleSendMessage() {
   }
 
   try {
+    streamController = new AbortController()
     await streamAgentChat({
       conversation_id: activeConversationId.value,
       patient_id: currentPatientId.value,
       message: text,
+      locale: locale.value,
       active_study_id: activeStudyId.value,
       onStart: () => {
         scrollToBottom()
@@ -319,6 +324,7 @@ async function handleSendMessage() {
         currentReport.value = null
         currentPlan.value = null
         isStreaming.value = false
+        streamController = undefined
         scrollToBottom()
       },
       onError: (err) => {
@@ -327,17 +333,52 @@ async function handleSendMessage() {
           id: Date.now() + 2,
           conversation_id: activeConversationId.value,
           role: 'assistant',
-          content: `⚠️ 对话流连接遇到问题: ${err.message}`,
+          content: t('ui.copilot.error.stream', { message: err.message }),
           tool_calls: [],
           created_at: new Date().toISOString(),
         })
         isStreaming.value = false
+        streamController = undefined
         scrollToBottom()
       },
-    })
+    }, streamController.signal)
   } catch (err: any) {
     isStreaming.value = false
+    streamController = undefined
   }
+}
+
+async function clearConversation() {
+  const conversationId = activeConversationId.value
+  if (!conversationId) return
+  cancelStreaming()
+  try {
+    if (localPreview) {
+      const remaining = readPreviewConversations().filter(item => item.id !== conversationId)
+      localStorage.setItem(previewKey.value, JSON.stringify(remaining))
+    } else {
+      await deleteAgentConversation(conversationId)
+    }
+    conversations.value = conversations.value.filter(item => item.id !== conversationId)
+    activeConversationId.value = ''
+    messages.value = []
+    const next = conversations.value[0]
+    if (next) {
+      activeConversationId.value = next.id
+      await loadMessages(next.id)
+    }
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : t('ui.copilot.error.delete')
+  }
+}
+
+function cancelStreaming() {
+  streamController?.abort()
+  streamController = undefined
+  isStreaming.value = false
+  currentThinking.value = ''
+  currentTextDelta.value = ''
+  currentTools.value = []
 }
 
 watch(patientScope, () => {
@@ -353,6 +394,7 @@ onMounted(() => {
   }
 })
 onUnmounted(() => {
+  streamController?.abort()
   if (statusTimer) window.clearInterval(statusTimer)
 })
 </script>
@@ -361,8 +403,8 @@ onUnmounted(() => {
   <aside
     v-if="open"
     class="copilot-drawer"
-    :class="{ expanded: isExpanded }"
-    role="dialog"
+    :class="{ expanded: isExpanded, embedded }"
+    :role="embedded ? 'region' : 'dialog'"
     :aria-label="$t('ui.copilot.title')"
   >
     <!-- Header -->
@@ -375,7 +417,7 @@ onUnmounted(() => {
             <span class="version-tag">{{ $t('ui.copilot.engine') }}</span>
           </div>
           <div class="context-row">
-            <span class="context-pill">{{ patientScope ? `患者 ${patientScope}` : '请选择患者' }}</span>
+            <span class="context-pill">{{ patientScope ? $t('ui.copilot.patientContext', { id: patientScope }) : $t('ui.copilot.selectPatient') }}</span>
             <span class="context-pill" :title="radsightStatusLabel">{{ radsightStatusLabel }}</span>
             <span v-if="selectedCTSeries" class="series-pill" :title="selectedCTSeries">
               CT: {{ selectedCTSeries }}
@@ -402,12 +444,13 @@ onUnmounted(() => {
         >
           ＋
         </button>
+        <button type="button" class="icon-btn" :disabled="!activeConversationId" :title="$t('ui.copilot.clearConversation')" @click="clearConversation">⌫</button>
         <button type="button" class="icon-btn" :title="$t('ui.copilot.recordsMode')" @click="emit('openRecords')">✧</button>
         <button
           type="button"
           class="icon-btn"
           @click="isExpanded = !isExpanded"
-          :title="isExpanded ? '还原常规宽度' : '扩展为工作台视图'"
+          :title="$t(isExpanded ? 'ui.copilot.restoreWidth' : 'ui.copilot.expandWorkspace')"
         >
           {{ isExpanded ? '⇲' : '⇱' }}
         </button>
@@ -415,7 +458,7 @@ onUnmounted(() => {
           type="button"
           class="icon-btn close"
           @click="emit('close')"
-          title="最小化助手"
+          :title="$t('ui.copilot.minimize')"
         >
           ✕
         </button>
@@ -428,7 +471,7 @@ onUnmounted(() => {
       <p v-if="!conversations.length" class="history-empty">{{ $t('ui.copilot.noHistory') }}</p>
       <div v-else class="history-list">
         <button v-for="conversation in conversations" :key="conversation.id" type="button" class="history-item" :class="{ selected: activeConversationId === conversation.id }" :disabled="isStreaming" @click="selectConversation(conversation.id)">
-          <span>{{ conversation.title }}</span><small>{{ conversation.updated_at ? new Date(conversation.updated_at).toLocaleString() : '' }}</small>
+          <span>{{ conversation.title }}</span><small>{{ conversation.updated_at ? new Date(conversation.updated_at).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US') : '' }}</small>
         </button>
       </div>
     </nav>
@@ -439,8 +482,8 @@ onUnmounted(() => {
       <div v-if="messages.length === 0 && !isStreaming" class="welcome-box">
         <div class="welcome-icon">🏥</div>
         <h4>{{ $t('ui.copilot.welcome') }}</h4>
-        <p v-if="radsightReady">基于 Pi 框架自主调度，本地 RadSight-8B 3D CT 多模态大模型已加载（{{ radsightDetails.quant || 'bf16' }}）。</p>
-        <p v-else>基于 Pi 框架自主调度。{{ radsightStatusLabel }}，Talk to CT 将在权重就绪后进行真推理。</p>
+        <p v-if="radsightReady">{{ $t('ui.copilot.runtimeReady', { quant: radsightDetails.quant || 'bf16' }) }}</p>
+        <p v-else>{{ $t('ui.copilot.runtimeWaiting', { status: radsightStatusLabel }) }}</p>
         <div class="feature-badges">
           <span>{{ $t('ui.copilot.featureCt') }}</span>
           <span>{{ $t('ui.copilot.featureRecords') }}</span>
@@ -469,7 +512,7 @@ onUnmounted(() => {
 
           <!-- Selected CT Series Badge if recorded -->
           <div v-if="msg.selected_ct_series" class="series-selected-badge">
-            <span>🎯 分析序列：{{ msg.selected_ct_series }}</span>
+            <span>{{ $t('ui.copilot.selectedSeries', { series: msg.selected_ct_series }) }}</span>
           </div>
 
           <!-- Message Text -->
@@ -503,17 +546,17 @@ onUnmounted(() => {
               <span class="tool-name">
                 {{
                   t.tool === 'talk_to_ct'
-                    ? 'RadSight-8B 3D CT 分析'
+                    ? $t('ui.copilot.tool.talkToCt')
                     : t.tool === 'get_patient_records'
-                    ? '调取患者病历'
+                    ? $t('ui.copilot.tool.records')
                     : t.tool === 'get_segmentation_qc'
-                    ? '提取器官分割体积'
+                    ? $t('ui.copilot.tool.segmentation')
                     : t.tool === 'draft_radiology_report'
-                    ? '起草放射学报告'
+                    ? $t('ui.copilot.tool.report')
                     : t.tool === 'draft_treatment_plan'
-                    ? '起草完整治疗计划'
+                    ? $t('ui.copilot.tool.plan')
                     : t.tool === 'list_patient_ct_scans'
-                    ? '检索 CT 序列'
+                    ? $t('ui.copilot.tool.ctScans')
                     : t.tool
                 }}
               </span>
@@ -536,35 +579,35 @@ onUnmounted(() => {
       <button
         type="button"
         class="prompt-chip"
-        @click="handleQuickPrompt('Talk to CT：请全面分析当前CT序列是否存在肺结节或占位征象')"
+        @click="handleQuickPrompt($t('ui.copilot.prompt.ct'))"
       >
         {{ $t('ui.copilot.quickCt') }}
       </button>
       <button
         type="button"
         class="prompt-chip"
-        @click="handleQuickPrompt('查询当前患者的既往病史、过敏史与实验室检验指标')"
+        @click="handleQuickPrompt($t('ui.copilot.prompt.records'))"
       >
         {{ $t('ui.copilot.quickRecords') }}
       </button>
       <button
         type="button"
         class="prompt-chip"
-        @click="handleQuickPrompt('核验当前 3D 解剖器官分割体积统计与质控指标')"
+        @click="handleQuickPrompt($t('ui.copilot.prompt.qc'))"
       >
         {{ $t('ui.copilot.quickQc') }}
       </button>
       <button
         type="button"
         class="prompt-chip"
-        @click="handleQuickPrompt('根据当前 CT 影像征象与病历，帮我起草一份标准放射学诊断报告')"
+        @click="handleQuickPrompt($t('ui.copilot.prompt.report'))"
       >
         {{ $t('ui.copilot.quickReport') }}
       </button>
       <button
         type="button"
         class="prompt-chip"
-        @click="handleQuickPrompt('请深入分析该患者症状、病史、CT 与分割质控后，列出完整的治疗计划（须调用全部临床工具，禁止编造影像征象）')"
+        @click="handleQuickPrompt($t('ui.copilot.prompt.plan'))"
       >
         {{ $t('ui.copilot.featurePlan') }}
       </button>
@@ -576,18 +619,18 @@ onUnmounted(() => {
         v-model="inputMessage"
         class="chat-input"
         rows="2"
-        placeholder="向 AI Copilot 提问，或指示 Talk to CT 分析当前影像 (Enter 发送)..."
+        :placeholder="$t('ui.copilot.placeholder')"
         :disabled="isStreaming"
         @keydown.enter.prevent="handleSendMessage"
       ></textarea>
       <button
         type="button"
         class="send-btn"
-        :disabled="!inputMessage.trim() || isStreaming"
-        @click="handleSendMessage"
+        :disabled="!isStreaming && !inputMessage.trim()"
+        @click="isStreaming ? cancelStreaming() : handleSendMessage()"
       >
-        <span v-if="!isStreaming">发送</span>
-        <span v-else class="spin">⋯</span>
+        <span v-if="!isStreaming">{{ $t('ui.copilot.send') }}</span>
+        <span v-else>{{ $t('ui.copilot.cancel') }}</span>
       </button>
     </div>
   </aside>
@@ -614,6 +657,16 @@ onUnmounted(() => {
 
 .copilot-drawer.expanded {
   width: 720px;
+}
+
+.copilot-drawer.embedded,.copilot-drawer.embedded.expanded {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px #d9e6e2;
 }
 
 /* Header */

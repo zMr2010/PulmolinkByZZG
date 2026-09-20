@@ -4,12 +4,13 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePatientStore } from '@/stores/patients'
 import { useWorkspaceTabsStore } from '@/stores/workspaceTabs'
+import { routeWorkspaceTabKey } from '@/router/workspaceTabs'
 import AppSidebar from './Sidebar.vue'
 import AppTopbar from './Topbar.vue'
 import AIAssistant from './AIAssistant.vue'
 import WorkspaceTabs from './WorkspaceTabs.vue'
 import { localPreview } from '@/utils/runtime'
-import { t } from '@/i18n'
+import { locale, t } from '@/i18n'
 
 const auth = useAuthStore()
 const patients = usePatientStore()
@@ -19,35 +20,32 @@ const sidebarOpen = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('pulmolink-sidebar-collapsed') === 'true')
 const shellClass = computed(() => `portal-${auth.portal ?? 'doctor'}`)
 const preview = localPreview || import.meta.env.VITE_PREVIEW === 'true'
-const tabTitles: Record<string, string> = {
-  'doctor-dashboard': 'ui.sidebar.patientWorkspace',
-  'doctor-patient-overview': 'ui.sidebar.patientOverview',
-  'doctor-patient-imaging': 'Medical Imaging',
-  'doctor-patient-ai': 'ui.sidebar.aiDiagnosis',
-  'doctor-patient-report': 'ui.sidebar.clinicalReport',
-  'doctor-patient-3d': 'ui.sidebar.organ3d',
-  'doctor-admin-users': 'ui.adminUsers.title',
-  'doctor-admin-access': 'ui.patientAccess.title',
-  'doctor-admin-stats': 'ui.adminStats.title',
-  'doctor-archived': 'ui.archive.title',
-  'doctor-patient-simulation': 'Simulation',
-  'patient-dashboard': 'My Health',
-  'patient-examinations': 'My Examinations',
-  'patient-examination-detail': 'Examination Detail',
-  'patient-reports': 'My Reports',
-  'patient-body': 'My Body',
-  'patient-ai': 'AI Assistant',
-}
 const currentPatientName = computed(() => {
   const id = typeof route.params.id === 'string' ? route.params.id : ''
   return patients.patients.find(patient => patient.id === id)?.name || id
 })
+const currentTab = computed(() => {
+  if (!auth.portal || !route.meta.tabKind || !route.meta.titleKey) return null
+  const kind = String(route.meta.tabKind)
+  const patientScoped = kind.startsWith('patient-') || ['anatomy-viewer', 'surgery-simulation'].includes(kind)
+  const titleParams: Record<string, string | number> = patientScoped && currentPatientName.value
+    ? { patient: currentPatientName.value }
+    : {}
+  return {
+    key: routeWorkspaceTabKey(route, auth.portal),
+    path: route.fullPath,
+    titleKey: String(route.meta.titleKey),
+    titleParams,
+    portal: auth.portal,
+    kind,
+  }
+})
 const currentTabTitle = computed(() => {
-  if (route.path.endsWith('/profile')) return 'ui.topbar.profile'
-  const base = tabTitles[String(route.name)] || 'PulmoLink'
-  return currentPatientName.value && String(route.name).startsWith('doctor-patient-')
-    ? `${currentPatientName.value} · ${base}`
-    : base
+  locale.value
+  const tab = currentTab.value
+  if (!tab) return 'PulmoLink'
+  const translated = t(tab.titleKey, tab.titleParams)
+  return tab.titleParams.patient ? `${tab.titleParams.patient} · ${translated}` : translated
 })
 
 watch(sidebarCollapsed, (collapsed) => {
@@ -55,19 +53,13 @@ watch(sidebarCollapsed, (collapsed) => {
 })
 
 watch(currentTabTitle, (title) => {
-  document.title = `${t(title)} · PulmoLink`
+  document.title = `${title} · PulmoLink`
 }, { immediate: true })
 
 watch(
-  [() => route.fullPath, currentTabTitle, () => auth.portal],
+  [() => route.fullPath, currentTab, () => auth.portal],
   () => {
-    if (!auth.portal || route.path === '/login') return
-    workspaceTabs.openTab({
-      id: route.fullPath,
-      path: route.fullPath,
-      title: currentTabTitle.value,
-      portal: auth.portal,
-    })
+    if (currentTab.value) workspaceTabs.openTab(currentTab.value)
   },
   { immediate: true },
 )

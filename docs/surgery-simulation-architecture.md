@@ -6,7 +6,9 @@ This module is a research and teaching demo. It is not intended for diagnosis, s
 
 The repository already uses Vue 3, TypeScript, Vite, Pinia and Three.js in the browser, plus FastAPI, PostgreSQL, Docker and nginx on the server. The existing imaging pipeline already contains an NV-Segment-CTMR adapter, NIfTI affine/spacing handling, mask-to-surface extraction, smoothing/decimation and GLB export. These remain the source of segmentation and reusable preprocessing primitives.
 
-New code is isolated under `src/simulation`, a small simulation Pinia store, a simulation view, and later a backend `simulations` domain. Existing patient, imaging, inference and report contracts are not replaced. NV-Segment-CTMR is not reimplemented. Existing large-blob database models are not extended for new GLB, NIfTI or physics streams; simulation assets belong in a mounted volume behind an asset-store abstraction.
+New code is isolated under `src/simulation`, a small simulation Pinia store, a simulation view, and the backend `simulation-cases` domain. Existing patient, imaging, inference and report contracts are not replaced. NV-Segment-CTMR is not reimplemented. Existing large-blob database models are not extended for new GLB, NIfTI or physics streams; simulation assets live below the configured storage root and are served only after doctor ownership checks.
+
+The simulation source is intentionally independent from the Imaging page. A doctor uploads `.nii` or `.nii.gz` again on the simulation page. `POST /api/v1/simulation-cases` validates and stores that source without creating a `MedicalImage`; the browser polls the returned case and loads its protected manifest after preprocessing. No uploaded patient CT is silently substituted with the teaching manifest. When NV-Segment-CTMR is unavailable the case fails with `MODEL_UNAVAILABLE`, while the clearly labelled teaching demo remains usable as a separate mode.
 
 ## E. Target directories
 
@@ -21,15 +23,14 @@ src/simulation/
   workers/           geodesic and deformation workers
   types.ts
 backend/app/
-  api/routes/simulations.py
-  services/simulation_manager.py
-  services/simulation_assets.py
+  routers/simulations.py
+  services/simulation_cases.py
   simulation/sofa_worker.py
   simulation/protocol.py
-simulation-data/{caseId}/manifest.json
-simulation-data/{caseId}/{structureId}/visual.glb
-simulation-data/{caseId}/{structureId}/physics.bin
-simulation-data/{caseId}/{structureId}/binding.bin
+data/simulation-cases/{caseId}/status.json
+data/simulation-cases/{caseId}/source.nii.gz
+data/simulation-cases/{caseId}/output/manifest.json
+data/simulation-cases/{caseId}/output/{structureId}/visual.glb
 ```
 
 ## F. Browser–FastAPI–SOFA flow

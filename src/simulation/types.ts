@@ -1,7 +1,16 @@
-export type Vec3Tuple = [number, number, number]
+import type {
+  Medical3DManifest,
+  Medical3DMaterial,
+  Medical3DPhysicsMode,
+  Medical3DStructure,
+  Medical3DTransform,
+  Vec3Tuple as SharedVec3Tuple,
+} from '@/shared/3d/types'
+
+export type Vec3Tuple = SharedVec3Tuple
 export type Vec4Tuple = [number, number, number, number]
 
-export type PhysicsMode = 'SOFT_BODY' | 'KINEMATIC' | 'RIGID' | 'STATIC'
+export type PhysicsMode = Medical3DPhysicsMode
 export type InteractionMode =
   | 'SELECT_FIRST_POINT'
   | 'SELECT_SECOND_POINT'
@@ -25,49 +34,10 @@ export type SimulationResourceStatus =
   | 'READY'
   | 'FAILED'
 
-export interface SimulationMaterial {
-  color: string
-  opacity?: number
-  roughness?: number
-  metalness?: number
-  doubleSided?: boolean
-}
-
-export interface SimulationTransform {
-  position?: Vec3Tuple
-  rotation?: Vec3Tuple
-  scale?: Vec3Tuple
-}
-
-export interface SimulationStructure {
-  id: string
-  name: string
-  type: string
-  labelId?: number | null
-  visualMesh: string
-  physicsMesh?: string | null
-  binding?: string | null
-  nodeNames?: string[]
-  deformable: boolean
-  visible: boolean
-  physicsMode: PhysicsMode
-  materialProfile?: string | null
-  material: SimulationMaterial
-  transform?: SimulationTransform
-  metadata: Record<string, unknown>
-}
-
-export interface SimulationManifest {
-  schemaVersion: '1.0'
-  id: string
-  caseId: string
-  name: string
-  coordinateSystem: 'GLTF_Y_UP'
-  units: 'meter'
-  structures: SimulationStructure[]
-  metadata: Record<string, unknown>
-  sourceToSimulation?: number[]
-}
+export type SimulationMaterial = Medical3DMaterial
+export type SimulationTransform = Medical3DTransform
+export type SimulationStructure = Medical3DStructure
+export type SimulationManifest = Medical3DManifest
 
 export interface SurfacePoint {
   structureId: string

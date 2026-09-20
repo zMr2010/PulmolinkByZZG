@@ -10,27 +10,45 @@
  */
 
 const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:8000";
+const BACKEND_AUTHORIZATION = process.env.BACKEND_AUTHORIZATION || "";
+const BACKEND_OPTIONS = BACKEND_AUTHORIZATION ? { headers: { Authorization: BACKEND_AUTHORIZATION } } : {};
 const RADSIGHT_URL = process.env.RADSIGHT_URL || "http://127.0.0.1:8001";
 const LLM_BASE_URL = process.env.AGENT_LLM_BASE_URL || "http://127.0.0.1:8133/v1";
-const LLM_API_KEY = process.env.AGENT_LLM_API_KEY || "ydy2837465#";
+const LLM_API_KEY = process.env.AGENT_LLM_API_KEY || "";
 const LLM_MODEL = process.env.AGENT_LLM_MODEL || "Qwen3.8-Flash-Next-MLX-oQ6-MTP";
 
 export default function medicalExtension(pi) {
   // Register custom OpenAI-compatible backend LLM provider
   pi.registerProvider("custom-backend-llm", {
-    name: "Custom Backend LLM",
+    name: "Configured Agent LLM",
     baseUrl: LLM_BASE_URL,
     apiKey: LLM_API_KEY,
+    authHeader: true,
     api: "openai-completions",
     models: [
       {
         id: LLM_MODEL,
         name: LLM_MODEL,
         reasoning: true,
+        thinkingLevelMap: {
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max"
+        },
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192
+        contextWindow: 1000000,
+        maxTokens: 8192,
+        compat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: true,
+          maxTokensField: "max_tokens",
+          requiresReasoningContentOnAssistantMessages: true,
+          thinkingFormat: "deepseek"
+        }
       }
     ]
   });
@@ -53,7 +71,7 @@ export default function medicalExtension(pi) {
     },
     async execute(toolCallId, params) {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/ct_scans`);
+        const res = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/ct_scans`, BACKEND_OPTIONS);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
@@ -89,7 +107,7 @@ export default function medicalExtension(pi) {
     },
     async execute(toolCallId, params) {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/records`);
+        const res = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/records`, BACKEND_OPTIONS);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
@@ -130,7 +148,7 @@ export default function medicalExtension(pi) {
     async execute(toolCallId, params) {
       try {
         const query = params.study_id ? `?study_id=${encodeURIComponent(params.study_id)}` : "";
-        const res = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/segmentation_qc${query}`);
+        const res = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/segmentation_qc${query}`, BACKEND_OPTIONS);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
@@ -245,7 +263,7 @@ export default function medicalExtension(pi) {
         let patientContext = null;
         if (params.patient_id) {
           try {
-            const patRes = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/records`);
+            const patRes = await fetch(`${BACKEND_URL}/api/v1/agent/internal/patients/${params.patient_id}/records`, BACKEND_OPTIONS);
             if (patRes.ok) {
               const pData = await patRes.json();
               patientContext = {

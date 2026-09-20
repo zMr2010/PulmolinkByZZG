@@ -66,7 +66,7 @@ test('doctor opens a patient, preserves a report draft, signs it, and the patien
   await page.getByRole('button', { name: 'Open patient record: demo_patient' }).first().click()
   await expect(page).toHaveURL(/\/doctor\/patients\/P20260021/)
 
-  await page.getByRole('link', { name: 'Medical Imaging' }).first().click()
+  await page.getByRole('link', { name: /Medical imaging/i }).first().click()
   await expect(page).toHaveURL(/\/imaging/)
   await expect(page.locator('canvas').first()).toBeVisible()
 
@@ -93,6 +93,7 @@ test('doctor opens a patient, preserves a report draft, signs it, and the patien
 })
 
 test('3D viewer previews in the same tab and Escape returns to the patient', async ({ page, context }) => {
+  test.setTimeout(120_000)
   await page.goto('/login')
   await page.getByRole('button', { name: /Doctor Portal/ }).click()
   await page.getByRole('button', { name: 'Open patient record: demo_patient' }).first().click()
@@ -101,10 +102,31 @@ test('3D viewer previews in the same tab and Escape returns to the patient', asy
   await expect(page).toHaveURL(/\/doctor\/patients\/P20260021\/3d/)
   await page.getByRole('button', { name: /Preview 3D viewer in this tab/ }).click()
 
-  await expect(page).toHaveURL(/\/viewer\/study\/P20260021/)
+  await expect(page).toHaveURL(/\/doctor\/patients\/P20260021\/anatomy/)
   expect(context.pages()).toHaveLength(1)
+  await expect(page.getByTestId('anatomy-canvas').locator('canvas')).toBeVisible()
+  await expect(page.getByText(/Loading anatomy models/)).toBeHidden({ timeout: 90_000 })
+  await expect(page.getByTestId('organ-visibility-panel')).toBeVisible()
+  await expect(page.getByText('Cut depth', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Preview local opening' })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(/\/doctor\/patients\/P20260021\/3d/)
+})
+
+test('workspace tabs replace patient and query targets while titles follow the locale', async ({ page }) => {
+  await page.goto('/login')
+  await page.getByRole('button', { name: /Doctor Portal/ }).click()
+  await page.goto('/doctor/patients/P20260021/imaging?exam=EXAM-A')
+  await expect(page.locator('.workspace-tab')).toContainText('Medical imaging')
+
+  await page.goto('/doctor/patients/P20260022/imaging?exam=EXAM-B#slice-4')
+  await expect(page.locator('.workspace-tab').filter({ hasText: 'Medical imaging' })).toHaveCount(1)
+
+  await page.goto('/doctor/patients/P20260022/report')
+  await expect(page.locator('.workspace-tab')).toHaveCount(2)
+  await expect(page.locator('.workspace-tab').filter({ hasText: 'Clinical report' })).toHaveCount(1)
+  await page.getByRole('button', { name: /English|Chinese|中 \/ EN|EN \/ 中/ }).click()
+  await expect(page.locator('.workspace-tab').filter({ hasText: '医学影像' })).toHaveCount(1)
 })
 
 test('new patient registration completes onboarding with an isolated profile', async ({ page }) => {
@@ -120,11 +142,11 @@ test('new patient registration completes onboarding with an isolated profile', a
   await page.locator('[data-testid="onboarding-id"]').fill('E2E-IDENTITY-000001')
   await page.getByRole('button', { name: 'Complete profile' }).click()
   await expect(page).toHaveURL(/\/patient\/dashboard/)
-  await expect(page.getByText('My Health').first()).toBeVisible()
+  await expect(page.getByText(/My health/i).first()).toBeVisible()
 
   await page.reload()
   await expect(page).toHaveURL(/\/patient\/dashboard/)
-  await expect(page.getByRole('heading', { name: 'My Health', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /My health/i })).toBeVisible()
 })
 
 test('doctor invitation links a newly registered patient to one existing record', async ({ page }) => {

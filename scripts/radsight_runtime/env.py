@@ -7,8 +7,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 VENDOR_ROOT = PROJECT_ROOT / "third_party" / "damo-RadSight"
-DEFAULT_MODEL_PATH = Path("/Users/allenyuan/modilify_app/RadSight-8B")
-DEFAULT_VISION_ENCODER = Path("/Users/allenyuan/modilify_app/VL3-SigLIP-NaViT")
+DEFAULT_MODEL_PATH = Path.home() / ".cache" / "radsight" / "RadSight-8B"
+DEFAULT_VISION_ENCODER = Path.home() / ".cache" / "radsight" / "VL3-SigLIP-NaViT"
 DEFAULT_QUANT_CACHE = Path.home() / ".cache" / "radsight" / "RadSight-8B-int8"
 
 

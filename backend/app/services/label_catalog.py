@@ -271,7 +271,12 @@ class LabelCatalog:
                     merged = {}
                     for mode in ("CT_BODY", "MRI_BODY", "MRI_BRAIN"):
                         values = everything.get(mode) or {}
-                        merged.update({int(label): str(name) for label, name in values.items()})
+                        # Label ids overlap across modalities. CT_BODY is the
+                        # canonical fallback used by the current production
+                        # adapter, so later modality tables must not silently
+                        # rename an existing CT label.
+                        for label, name in values.items():
+                            merged.setdefault(int(label), str(name))
                     if merged:
                         labels.update(merged)
                         break

@@ -80,6 +80,11 @@ pnpm serve
 |---|---|---|
 | 合成演示 | `pnpm start:demo`，或 macOS 双击 `start.command` | 自动进入医生工作台；使用明确标注的演示档案；本地导入支持 DICOM、PNG/JPEG/WebP/BMP，仅保存在当前浏览器。 |
 | 本地真实 API | `pnpm start` | 同时启动 PostgreSQL、FastAPI 和前端；登录后使用 PostgreSQL 数据；NIfTI 上传进入患者档案。 |
+
+影像页和手术模拟使用两条独立的 CT 输入链路。影像页上传的 `.nii` / `.nii.gz`
+进入患者检查档案；手术模拟页必须再次单独上传 CT，文件只保存到受当前医生权限保护的
+`simulation-cases`，不会读取或创建影像页检查。独立 CT 的器官模拟生成需要配置
+`NV_SEGMENT_CT_DIR`；`pnpm start:demo` 仅展示教学资产，不处理 NIfTI。
 | Compose 生产栈 | `docker compose -f compose.yaml up -d --build` | Nginx 监听 `http://127.0.0.1:8080`，后端和 PostgreSQL 位于内部网络；按需叠加基础设施或 GPU 配置。 |
 
 Vite 开发服务器位于 `http://127.0.0.1:4173`，会把 `/api` 和 `/health` 转发到 `VMRB_BACKEND_URL`。
@@ -127,7 +132,7 @@ uv run alembic upgrade head
 
 ## 报告同步与工作区标签
 
-医生报告支持保存草稿和签署。草稿只对医生可见；签署后，患者可在“我的报告”、健康首页和对应检查详情中查看同一份报告。报告投递字段来自 `0008_report_delivery`，草稿默认值来自 `0014_record_draft_default`；DICOM 业务关联来自 `0016_dicom_business_links`；患者建档邀请、账号绑定和全局归档审计来自 `0017_patient_onboarding_and_archives`。`0018_merge_mri_and_v5` 安全汇合 MRI 与 V5 两条既有迁移分支，`0019_reconcile_access_control` 修复旧版本可能缺失的账号状态与 JWT 撤销表。`0020_structured_reporting` 增加结构化报告模板，并在报告中保存结构化字段。`0021_admin_console` 增加账号状态、强制下线、模板历史版本和运营统计支持。本地演示模式使用按账号隔离的浏览器持久化存储。
+医生报告支持保存草稿和签署。草稿只对医生可见；签署后，患者可在“我的报告”、健康首页和对应检查详情中查看同一份报告。报告投递字段来自 `0008_report_delivery`，草稿默认值来自 `0014_record_draft_default`；DICOM 业务关联来自 `0016_dicom_business_links`；患者建档邀请、账号绑定和全局归档审计来自 `0017_patient_onboarding_and_archives`。`0018_merge_mri_and_v5` 安全汇合 MRI 与 V5 两条既有迁移分支，`0019_reconcile_access_control` 修复旧版本可能缺失的账号状态与 JWT 撤销表。`0020_structured_reporting` 增加结构化报告模板，并在报告中保存结构化字段。`0021_admin_console` 增加账号状态、强制下线、模板历史版本和运营统计支持；`0022_merge_agent_and_admin_console` 汇合 Agent 与管理后台迁移历史，保持单一 Alembic head。本地演示模式使用按账号隔离的浏览器持久化存储。
 
 医生侧栏按“患者管理 / 临床工作流”组织为可展开树。打开患者后，可从树中进入概览、影像、AI 辅助诊断、报告和 3D 影像；这些页面会作为工作区标签保留，可快速切换或单独关闭。
 

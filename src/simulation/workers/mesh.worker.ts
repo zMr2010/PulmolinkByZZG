@@ -3,7 +3,8 @@ interface InitializeMessage {
   generation: number
   positions: ArrayBuffer
   indices: ArrayBuffer
-  anchor: number
+  anchors: ArrayBuffer
+  origin: [number, number, number]
   radius: number
 }
 
@@ -13,19 +14,57 @@ interface UpdateMessage {
   target: [number, number, number]
 }
 
-type WorkerMessage = InitializeMessage | UpdateMessage | { type: 'release'; generation: number }
+type WorkerMessage = InitializeMessage | UpdateMessage | { type: 'hold'; generation: number }
 
 let generation = 0
 let base = new Float32Array()
-let anchor = 0
+let anchors = new Uint32Array()
+let anchorMask = new Uint8Array()
+let dragOrigin: [number, number, number] = [0, 0, 0]
 let weights = new Float32Array()
 let adjacency: number[][] = []
-let lastDisplacement = new Float32Array()
-let releaseTimer: ReturnType<typeof setInterval> | undefined
 
-function clearRelease() {
-  if (releaseTimer !== undefined) clearInterval(releaseTimer)
-  releaseTimer = undefined
+interface HeapEntry {
+  vertex: number
+  distance: number
+}
+
+class MinHeap {
+  private readonly entries: HeapEntry[] = []
+
+  push(entry: HeapEntry) {
+    const entries = this.entries
+    entries.push(entry)
+    let index = entries.length - 1
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2)
+      if (entries[parent].distance <= entry.distance) break
+      entries[index] = entries[parent]
+      index = parent
+    }
+    entries[index] = entry
+  }
+
+  pop() {
+    const entries = this.entries
+    const first = entries[0]
+    const last = entries.pop()
+    if (!first || !last || entries.length === 0) return first
+    let index = 0
+    while (true) {
+      const left = index * 2 + 1
+      if (left >= entries.length) break
+      const right = left + 1
+      const child = right < entries.length && entries[right].distance < entries[left].distance ? right : left
+      if (entries[child].distance >= last.distance) break
+      entries[index] = entries[child]
+      index = child
+    }
+    entries[index] = last
+    return first
+  }
+
+  get size() { return this.entries.length }
 }
 
 function sendDeformation(displacement: Float32Array, started: number) {
@@ -45,7 +84,12 @@ function edgeLength(positions: Float32Array, a: number, b: number) {
   )
 }
 
-function deformationWeights(positions: Float32Array, indices: Uint32Array, source: number, radius: number) {
+function deformationWeights(
+  positions: Float32Array,
+  indices: Uint32Array,
+  sources: Uint32Array,
+  radius: number,
+) {
   const weightedAdjacency = Array.from({ length: positions.length / 3 }, () => new Map<number, number>())
   for (let index = 0; index < indices.length; index += 3) {
     const triangle = [indices[index], indices[index + 1], indices[index + 2]]
@@ -57,17 +101,19 @@ function deformationWeights(positions: Float32Array, indices: Uint32Array, sourc
   }
   const distances = new Float32Array(weightedAdjacency.length)
   distances.fill(Number.POSITIVE_INFINITY)
-  distances[source] = 0
-  const queue: Array<[number, number]> = [[source, 0]]
-  while (queue.length) {
-    queue.sort((a, b) => b[1] - a[1])
-    const [current, distance] = queue.pop() as [number, number]
+  const queue = new MinHeap()
+  for (const source of sources) {
+    distances[source] = 0
+    queue.push({ vertex: source, distance: 0 })
+  }
+  while (queue.size) {
+    const { vertex: current, distance } = queue.pop() as HeapEntry
     if (distance !== distances[current] || distance > radius) continue
     for (const [next, length] of weightedAdjacency[current]) {
       const candidate = distance + length
       if (candidate >= distances[next] || candidate > radius) continue
       distances[next] = candidate
-      queue.push([next, candidate])
+      queue.push({ vertex: next, distance: candidate })
     }
   }
   const result = new Float32Array(weightedAdjacency.length)
@@ -85,46 +131,31 @@ function deformationWeights(positions: Float32Array, indices: Uint32Array, sourc
 self.onmessage = (event: MessageEvent<WorkerMessage>) => {
   const message = event.data
   if (message.type === 'initialize') {
-    clearRelease()
     generation = message.generation
     base = new Float32Array(message.positions)
     const indices = new Uint32Array(message.indices)
-    anchor = message.anchor
-    const deformation = deformationWeights(base, indices, anchor, message.radius)
+    anchors = new Uint32Array(message.anchors)
+    if (!anchors.length || [...anchors].some(anchor => anchor >= base.length / 3)) {
+      throw new Error('Persistent drag constraint has an invalid anchor')
+    }
+    anchorMask = new Uint8Array(base.length / 3)
+    for (const anchor of anchors) {
+      anchorMask[anchor] = 1
+    }
+    dragOrigin = [...message.origin]
+    if (!dragOrigin.every(Number.isFinite)) throw new Error('Persistent drag constraint has an invalid origin')
+    const deformation = deformationWeights(base, indices, anchors, message.radius)
     weights = deformation.weights
     adjacency = deformation.adjacency
-    lastDisplacement = new Float32Array(base.length)
     self.postMessage({ type: 'ready', generation })
     return
   }
-  if (message.generation !== generation) return
-  if (message.type === 'release') {
-    clearRelease()
-    const released = new Float32Array(lastDisplacement)
-    let frame = 0
-    const frameCount = 18
-    releaseTimer = setInterval(() => {
-      const started = performance.now()
-      frame++
-      const remaining = Math.max(0, 1 - frame / frameCount)
-      const eased = remaining * remaining * (3 - 2 * remaining)
-      const displacement = new Float32Array(released.length)
-      for (let index = 0; index < released.length; index++) displacement[index] = released[index] * eased
-      lastDisplacement = displacement
-      sendDeformation(displacement, started)
-      if (frame >= frameCount) {
-        clearRelease()
-        self.postMessage({ type: 'settled', generation })
-      }
-    }, 16)
-    return
-  }
+  if (message.generation !== generation || message.type === 'hold') return
   const started = performance.now()
-  const anchorOffset = anchor * 3
   const delta = [
-    message.target[0] - base[anchorOffset],
-    message.target[1] - base[anchorOffset + 1],
-    message.target[2] - base[anchorOffset + 2],
+    message.target[0] - dragOrigin[0],
+    message.target[1] - dragOrigin[1],
+    message.target[2] - dragOrigin[2],
   ]
   let displacement = new Float32Array(base.length)
   for (let index = 0; index < weights.length; index++) {
@@ -134,13 +165,14 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
     displacement[index * 3 + 1] = delta[1] * weight
     displacement[index * 3 + 2] = delta[2] * weight
   }
-  // Jacobi relaxation approximates a local membrane spring solve. The dragged
-  // node remains constrained while its one-ring neighborhood shares strain.
-  for (let iteration = 0; iteration < 8; iteration++) {
+
+  // The whole local membrane shares strain while polygon anchors stay exact.
+  // Releasing a pointer only commits the constraint; it never springs back.
+  for (let iteration = 0; iteration < 10; iteration++) {
     const relaxed = new Float32Array(displacement)
     for (let index = 0; index < weights.length; index++) {
       const weight = weights[index]
-      if (!weight || index === anchor || weight > 0.999) continue
+      if (!weight || anchorMask[index] || weight > 0.999) continue
       const neighbors = adjacency[index]
       if (!neighbors.length) continue
       for (let axis = 0; axis < 3; axis++) {
@@ -148,12 +180,16 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
         for (const neighbor of neighbors) average += displacement[neighbor * 3 + axis]
         average /= neighbors.length
         const desired = delta[axis] * weight
-        relaxed[index * 3 + axis] = desired * 0.42 + average * 0.58
+        relaxed[index * 3 + axis] = desired * 0.38 + average * 0.62
       }
     }
     displacement = relaxed
   }
-  lastDisplacement = displacement
+  for (const anchor of anchors) {
+    displacement[anchor * 3] = delta[0]
+    displacement[anchor * 3 + 1] = delta[1]
+    displacement[anchor * 3 + 2] = delta[2]
+  }
   sendDeformation(displacement, started)
 }
 

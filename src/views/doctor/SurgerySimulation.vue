@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Crosshair, Eye, EyeOff, Focus, RotateCcw, Scissors, Undo2 } from 'lucide-vue-next'
-import { loadSimulationManifest } from '@/api/simulations'
+import { Crosshair, Eye, EyeOff, Focus, RotateCcw, Scissors, Undo2, Upload } from 'lucide-vue-next'
+import { getSimulationCase, loadSimulationManifest, uploadSimulationCase, type SimulationJob } from '@/api/simulations'
+import { token } from '@/api/client'
 import { useSimulationStore } from '@/stores/simulation'
 import { SceneManager } from '@/simulation/core/SceneManager'
 import { ModelManager } from '@/simulation/core/ModelManager'
@@ -9,14 +10,22 @@ import { CutManager } from '@/simulation/cutting/CutManager'
 import { PhysicsManager } from '@/simulation/deformation/PhysicsManager'
 import { InteractionManager } from '@/simulation/interaction/InteractionManager'
 import { t } from '@/i18n'
+import { isNiftiFileName, NIFTI_FILE_ACCEPT } from '@/utils/nifti'
+import { localPreview } from '@/utils/runtime'
 
 const DEMO_MANIFEST = '/simulation/demo/manifest.json'
-const CT_MANIFEST = '/simulation/tcga-zf-aa5n/manifest.json'
 const store = useSimulationStore()
 const host = ref<HTMLDivElement | null>(null)
 const message = ref(t('ui.simulation.instructions'))
 const previewReady = ref(false)
 const abortController = new AbortController()
+const simulationFile = ref<File | null>(null)
+const simulationJob = ref<SimulationJob | null>(null)
+const sourceError = ref('')
+const sourceBusy = ref(false)
+const uploadProgress = ref(0)
+const sourceInput = ref<HTMLInputElement | null>(null)
+let pollTimer: number | undefined
 let sceneManager: SceneManager | undefined
 let modelManager: ModelManager | undefined
 let cutManager: CutManager | undefined
@@ -24,6 +33,7 @@ let physicsManager: PhysicsManager | undefined
 let interactionManager: InteractionManager | undefined
 
 const canCut = computed(() => store.interactionMode === 'PREVIEW_CUT' && previewReady.value)
+const canUploadSimulation = computed(() => !!simulationFile.value && !sourceBusy.value && !localPreview)
 const isDev = import.meta.env.DEV
 const modeLabel = computed(() => ({
   SELECT_FIRST_POINT: t('ui.simulation.selectA'),
@@ -34,24 +44,34 @@ const modeLabel = computed(() => ({
   DRAG: t('ui.simulation.dragBoundary'),
 }[store.interactionMode]))
 
-async function initialize() {
+function disposeRuntime() {
+  interactionManager?.dispose()
+  cutManager?.clear()
+  modelManager?.dispose()
+  sceneManager?.dispose()
+  interactionManager = undefined
+  cutManager = undefined
+  modelManager = undefined
+  sceneManager = undefined
+}
+
+async function initialize(manifestUrl = DEMO_MANIFEST) {
   if (!host.value) return
-  store.beginLoad('teaching-human-demo')
+  store.beginLoad(manifestUrl.includes('/simulation-cases/') ? 'uploaded-ct' : 'teaching-human-demo')
   store.resetInteraction()
   try {
-    let manifest: Awaited<ReturnType<typeof loadSimulationManifest>>
-    try {
-      manifest = await loadSimulationManifest(CT_MANIFEST, abortController.signal)
-    } catch (reason) {
-      if (abortController.signal.aborted) throw reason
-      manifest = await loadSimulationManifest(DEMO_MANIFEST, abortController.signal)
-    }
+    const manifest = await loadSimulationManifest(manifestUrl, abortController.signal)
     store.currentCase = manifest.caseId
     store.setManifest(manifest)
     await nextTick()
     if (!host.value) return
+    disposeRuntime()
     sceneManager = new SceneManager(host.value)
-    modelManager = new ModelManager(sceneManager.scene)
+    const accessToken = manifestUrl.startsWith('/api/') ? token() : null
+    modelManager = new ModelManager(
+      sceneManager.scene,
+      accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    )
     cutManager = new CutManager()
     physicsManager = new PhysicsManager()
     physicsManager.onStep = milliseconds => { store.physicsStepTime = milliseconds }
@@ -92,6 +112,69 @@ async function initialize() {
   }
 }
 
+function selectSimulationFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] || null
+  input.value = ''
+  sourceError.value = ''
+  simulationJob.value = null
+  if (file && !isNiftiFileName(file.name)) {
+    simulationFile.value = null
+    sourceError.value = t('ui.simulation.invalidCt')
+    return
+  }
+  simulationFile.value = file
+}
+
+function schedulePoll(caseId: string) {
+  window.clearTimeout(pollTimer)
+  pollTimer = window.setTimeout(() => { void pollSimulationCase(caseId) }, 1200)
+}
+
+async function pollSimulationCase(caseId: string) {
+  if (abortController.signal.aborted) return
+  try {
+    const job = await getSimulationCase(caseId)
+    simulationJob.value = job
+    if (job.status === 'READY' && job.manifestUrl) {
+      sourceBusy.value = false
+      message.value = t('ui.simulation.uploadReady')
+      await initialize(job.manifestUrl)
+      return
+    }
+    if (job.status === 'FAILED') {
+      sourceBusy.value = false
+      sourceError.value = job.errorCode === 'MODEL_UNAVAILABLE'
+        ? t('ui.simulation.modelUnavailable')
+        : job.errorMessage || t('ui.simulation.buildFailed')
+      return
+    }
+    schedulePoll(caseId)
+  } catch (reason) {
+    sourceBusy.value = false
+    sourceError.value = reason instanceof Error ? reason.message : t('ui.simulation.buildFailed')
+  }
+}
+
+async function submitSimulationCt() {
+  if (!simulationFile.value || !canUploadSimulation.value) return
+  sourceBusy.value = true
+  sourceError.value = ''
+  uploadProgress.value = 0
+  try {
+    const job = await uploadSimulationCase(simulationFile.value, {
+      signal: abortController.signal,
+      onProgress: progress => { uploadProgress.value = progress.percent },
+    })
+    simulationJob.value = job
+    schedulePoll(job.caseId)
+  } catch (reason) {
+    sourceBusy.value = false
+    if (reason instanceof DOMException && reason.name === 'AbortError') return
+    sourceError.value = reason instanceof Error ? reason.message : t('ui.simulation.uploadFailed')
+  }
+}
+
 function selectStructure(id: string) {
   store.selectedOrgan = id
   modelManager?.setSelected(id)
@@ -108,7 +191,7 @@ function toggleIsolate() {
 }
 
 function applyCut() {
-  interactionManager?.commitPredictedOpening(store.cutDepthPercent)
+  interactionManager?.commitPredictedOpening(store.cutDepthPercent, store.woundOpeningPercent)
 }
 
 async function resetSimulation() {
@@ -137,15 +220,14 @@ function applyDebugVisibility() {
 }
 
 watch(() => store.bodyOpacity, opacity => modelManager?.setBodyOpacity(opacity))
+watch(() => store.woundOpeningPercent, opening => cutManager?.setActiveWoundOpening(opening))
 watch(() => store.debug, applyDebugVisibility, { deep: true })
 
 onMounted(initialize)
 onBeforeUnmount(() => {
+  window.clearTimeout(pollTimer)
   abortController.abort()
-  interactionManager?.dispose()
-  cutManager?.clear()
-  modelManager?.dispose()
-  sceneManager?.dispose()
+  disposeRuntime()
 })
 </script>
 
@@ -163,6 +245,28 @@ onBeforeUnmount(() => {
         <button type="button" class="cut-button" :disabled="!canCut" @click="applyCut"><Scissors :size="16" />{{ $t('ui.simulation.previewOpening') }}</button>
       </div>
     </header>
+
+    <section class="simulation-source" aria-label="Independent simulation CT upload">
+      <div>
+        <span class="source-kicker">{{ $t('ui.simulation.independentInput') }}</span>
+        <h3>{{ $t('ui.simulation.uploadCtTitle') }}</h3>
+        <p>{{ $t('ui.simulation.uploadCtHelp') }}</p>
+        <p v-if="localPreview" class="source-warning">{{ $t('ui.simulation.fullStackRequired') }}</p>
+        <p v-if="sourceError" class="source-error" role="alert">{{ sourceError }}</p>
+        <p v-if="simulationJob && !sourceError" class="source-status" role="status">
+          {{ $t('ui.simulation.jobStatus', { status: simulationJob.status, progress: simulationJob.progress }) }}
+        </p>
+      </div>
+      <div class="source-actions">
+        <button type="button" class="tool-button source-picker" :disabled="sourceBusy" @click="sourceInput?.click()">
+          <Upload :size="16" />{{ simulationFile?.name || $t('ui.simulation.chooseCt') }}
+        </button>
+        <input ref="sourceInput" class="source-input" type="file" :accept="NIFTI_FILE_ACCEPT" @change="selectSimulationFile" />
+        <button type="button" class="cut-button" :disabled="!canUploadSimulation" @click="submitSimulationCt">
+          {{ sourceBusy ? $t('ui.simulation.uploadingCt', { progress: uploadProgress }) : $t('ui.simulation.buildFromCt') }}
+        </button>
+      </div>
+    </section>
 
     <div class="simulation-layout">
       <div class="viewport-card">
@@ -210,6 +314,12 @@ onBeforeUnmount(() => {
             <input v-model.number="store.cutDepthPercent" type="range" min="5" max="100" step="5">
             <small>{{ $t('ui.simulation.cutDepthHint') }}</small>
           </label>
+          <label class="depth-control opening-control">
+            <span>{{ $t('ui.simulation.woundOpening') }}</span>
+            <strong>{{ store.woundOpeningPercent }}%</strong>
+            <input v-model.number="store.woundOpeningPercent" type="range" min="0" max="100" step="5">
+            <small>{{ $t('ui.simulation.woundOpeningHint') }}</small>
+          </label>
           <dl>
             <div><dt>{{ $t('ui.simulation.pointA') }}</dt><dd>{{ store.selectedPointA ? `triangle ${store.selectedPointA.triangleId}` : '—' }}</dd></div>
             <div><dt>{{ $t('ui.simulation.pointB') }}</dt><dd>{{ store.selectedPointB ? `triangle ${store.selectedPointB.triangleId}` : '—' }}</dd></div>
@@ -236,6 +346,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.simulation-source{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 16px;border:1px solid #c8dddf;border-radius:12px;background:#f7fbfb}.simulation-source h3{margin:3px 0 4px;font-size:14px}.simulation-source p{max-width:760px;margin:0;color:#617a80;font-size:10px;line-height:1.5}.source-kicker{color:#23808b;font-size:8px;font-weight:800;letter-spacing:.13em}.source-actions{display:flex;align-items:center;gap:8px;min-width:300px}.source-picker{max-width:260px;overflow:hidden;border-color:#a9ced2;background:#fff;color:#286b73;text-overflow:ellipsis;white-space:nowrap}.source-input{display:none}.source-warning,.source-error{margin-top:5px!important;color:#a55c22!important}.source-error{color:#b53d49!important}.source-status{margin-top:5px!important;color:#23727b!important;font-weight:650}
 .depth-control{display:grid;grid-template-columns:1fr auto;gap:5px 8px;margin-bottom:12px;padding:9px;border-radius:8px;background:#f2f8f8;color:#526d73;font-size:10px}.depth-control strong{color:#b44753}.depth-control input{grid-column:1/-1;width:100%;accent-color:#bd4e59}.depth-control small{grid-column:1/-1;color:#859a9f;line-height:1.4}
-.simulation-page{display:grid;gap:14px}.simulation-header{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 20px;border:1px solid #1d353c;border-radius:14px;background:linear-gradient(120deg,#0b2026,#102d34);color:#f4fbfc}.eyebrow{color:#68d7e5;font-size:9px;font-weight:800;letter-spacing:.16em}.simulation-header h2{margin:5px 0 4px;font-size:21px}.simulation-header p{max-width:720px;margin:0;color:#a9c0c6;font-size:11px}.header-actions{display:flex;flex-wrap:wrap;gap:8px}.tool-button,.cut-button,.panel-action{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid #31505a;border-radius:8px;background:#16343c;color:#dbecef;font-size:12px}.cut-button{border-color:#e66f79;background:#bd4e59;color:#fff}.cut-button:disabled,.panel-action:disabled{cursor:not-allowed;opacity:.42}.simulation-layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:14px;min-height:680px}.viewport-card{position:relative;overflow:hidden;border:1px solid #1d353c;border-radius:14px;background:#071418}.viewport-toolbar{display:flex;min-height:44px;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #1d353c;background:#0d2329;color:#bad0d5;font-size:11px}.viewport-toolbar label{display:flex;align-items:center;gap:8px}.viewport-toolbar input{width:110px;accent-color:#5fd2df}.mode{display:flex;align-items:center;gap:6px;color:#70d9e5;font-weight:750}.runtime-badge{padding:3px 6px;border:1px solid #34515a;border-radius:999px;color:#91aeb5;font-size:8px}.runtime-badge.prediction{border-color:#8c6d37;background:#3c321e;color:#f2ca79}.metric{margin-left:auto;color:#87a8b0;font-variant-numeric:tabular-nums}.metric+.metric{margin-left:0}.simulation-canvas{height:624px;touch-action:none}.viewport-state{position:absolute;inset:44px 0 39px;display:grid;place-items:center;background:#071418e8;color:#c6dce1}.viewport-state.error{color:#ff9ca5}.interaction-hint{position:absolute;right:12px;bottom:11px;left:12px;padding:8px 11px;border:1px solid #2c4c55;border-radius:8px;background:#08191fe8;color:#b9d2d7;font-size:11px;pointer-events:none}.simulation-panel{display:flex;flex-direction:column;gap:12px}.simulation-panel>section,.debug-panel{padding:13px;border:1px solid #d7e4e5;border-radius:12px;background:#fff}.panel-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}.panel-heading h3{margin:0;font-size:12px}.panel-heading span{color:#6e8a91;font-size:9px;overflow-wrap:anywhere}.structure-row{display:grid;width:100%;grid-template-columns:10px 1fr 24px;align-items:center;gap:9px;padding:8px 6px;border:0;border-bottom:1px solid #edf2f2;background:transparent;color:#294248;text-align:left}.structure-row.selected{border-radius:7px;background:#e7f6f7}.color-dot{width:8px;height:8px;border-radius:50%}.structure-row strong,.structure-row small{display:block}.structure-row strong{font-size:11px}.structure-row small{margin-top:2px;color:#84999e;font-size:8px}.visibility{display:grid;place-items:center;color:#617e84}.panel-action{width:100%;margin-top:10px;border-color:#bdd9dc;background:#eff8f8;color:#236f78}.point-data dl{display:grid;gap:7px;margin:0}.point-data dl>div{display:flex;justify-content:space-between;gap:8px}.point-data dt,.point-data dd{margin:0;font-size:9px}.point-data dt{color:#71878c}.point-data dd{max-width:170px;color:#294248;text-align:right;overflow-wrap:anywhere}.debug-panel summary{margin-bottom:9px;color:#2e5961;font-size:11px;font-weight:700}.debug-panel label{display:flex;align-items:center;gap:7px;margin:6px 0;color:#526d73;font-size:10px}.debug-panel small{display:block;margin-top:9px;color:#859a9f;font-size:9px;line-height:1.5}@media(max-width:1000px){.simulation-header{align-items:flex-start;flex-direction:column}.simulation-layout{grid-template-columns:1fr}.simulation-panel{display:grid;grid-template-columns:1fr 1fr}.simulation-canvas{height:520px}}@media(max-width:650px){.simulation-panel{grid-template-columns:1fr}.viewport-toolbar{flex-wrap:wrap}.simulation-canvas{height:430px}}
+.simulation-page{display:grid;gap:14px}.simulation-header{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 20px;border:1px solid #1d353c;border-radius:14px;background:linear-gradient(120deg,#0b2026,#102d34);color:#f4fbfc}.eyebrow{color:#68d7e5;font-size:9px;font-weight:800;letter-spacing:.16em}.simulation-header h2{margin:5px 0 4px;font-size:21px}.simulation-header p{max-width:720px;margin:0;color:#a9c0c6;font-size:11px}.header-actions{display:flex;flex-wrap:wrap;gap:8px}.tool-button,.cut-button,.panel-action{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid #31505a;border-radius:8px;background:#16343c;color:#dbecef;font-size:12px}.cut-button{border-color:#e66f79;background:#bd4e59;color:#fff}.cut-button:disabled,.panel-action:disabled{cursor:not-allowed;opacity:.42}.simulation-layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:14px;min-height:680px}.viewport-card{position:relative;overflow:hidden;border:1px solid #1d353c;border-radius:14px;background:#071418}.viewport-toolbar{display:flex;min-height:44px;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid #1d353c;background:#0d2329;color:#bad0d5;font-size:11px}.viewport-toolbar label{display:flex;align-items:center;gap:8px}.viewport-toolbar input{width:110px;accent-color:#5fd2df}.mode{display:flex;align-items:center;gap:6px;color:#70d9e5;font-weight:750}.runtime-badge{padding:3px 6px;border:1px solid #34515a;border-radius:999px;color:#91aeb5;font-size:8px}.runtime-badge.prediction{border-color:#8c6d37;background:#3c321e;color:#f2ca79}.metric{margin-left:auto;color:#87a8b0;font-variant-numeric:tabular-nums}.metric+.metric{margin-left:0}.simulation-canvas{height:624px;touch-action:none}.viewport-state{position:absolute;inset:44px 0 39px;display:grid;place-items:center;background:#071418e8;color:#c6dce1}.viewport-state.error{color:#ff9ca5}.interaction-hint{position:absolute;right:12px;bottom:11px;left:12px;padding:8px 11px;border:1px solid #2c4c55;border-radius:8px;background:#08191fe8;color:#b9d2d7;font-size:11px;pointer-events:none}.simulation-panel{display:flex;flex-direction:column;gap:12px}.simulation-panel>section,.debug-panel{padding:13px;border:1px solid #d7e4e5;border-radius:12px;background:#fff}.panel-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}.panel-heading h3{margin:0;font-size:12px}.panel-heading span{color:#6e8a91;font-size:9px;overflow-wrap:anywhere}.structure-row{display:grid;width:100%;grid-template-columns:10px 1fr 24px;align-items:center;gap:9px;padding:8px 6px;border:0;border-bottom:1px solid #edf2f2;background:transparent;color:#294248;text-align:left}.structure-row.selected{border-radius:7px;background:#e7f6f7}.color-dot{width:8px;height:8px;border-radius:50%}.structure-row strong,.structure-row small{display:block}.structure-row strong{font-size:11px}.structure-row small{margin-top:2px;color:#84999e;font-size:8px}.visibility{display:grid;place-items:center;color:#617e84}.panel-action{width:100%;margin-top:10px;border-color:#bdd9dc;background:#eff8f8;color:#236f78}.point-data dl{display:grid;gap:7px;margin:0}.point-data dl>div{display:flex;justify-content:space-between;gap:8px}.point-data dt,.point-data dd{margin:0;font-size:9px}.point-data dt{color:#71878c}.point-data dd{max-width:170px;color:#294248;text-align:right;overflow-wrap:anywhere}.debug-panel summary{margin-bottom:9px;color:#2e5961;font-size:11px;font-weight:700}.debug-panel label{display:flex;align-items:center;gap:7px;margin:6px 0;color:#526d73;font-size:10px}.debug-panel small{display:block;margin-top:9px;color:#859a9f;font-size:9px;line-height:1.5}@media(max-width:1000px){.simulation-header,.simulation-source{align-items:flex-start;flex-direction:column}.source-actions{width:100%;min-width:0}.simulation-layout{grid-template-columns:1fr}.simulation-panel{display:grid;grid-template-columns:1fr 1fr}.simulation-canvas{height:520px}}@media(max-width:650px){.source-actions{align-items:stretch;flex-direction:column}.source-picker{max-width:none}.simulation-panel{grid-template-columns:1fr}.viewport-toolbar{flex-wrap:wrap}.simulation-canvas{height:430px}}
 </style>

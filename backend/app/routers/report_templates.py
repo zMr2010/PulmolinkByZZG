@@ -3,11 +3,16 @@ from uuid import uuid4
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
+from app.audit import audit
 from app.deps import DB, CurrentUser, require_admin, require_doctor
 from app.errors import APIError, Envelope, success
 from app.models import ReportTemplate, ReportTemplateVersion, utcnow
-from app.report_templates import normalize_template_fields, snapshot_template, template_out, version_out
-from app.audit import audit
+from app.report_templates import (
+    normalize_template_fields,
+    snapshot_template,
+    template_out,
+    version_out,
+)
 from app.schemas import (
     ReportTemplateCreate,
     ReportTemplateOut,

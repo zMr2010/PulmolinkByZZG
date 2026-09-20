@@ -18,6 +18,7 @@ def test_nvidia_wrapper_requires_complete_model_and_runtime(app_env, tmp_path, m
     (model_root / "vista3d_pretrained_model" / "model.pt").write_bytes(b"fixture")
     monkeypatch.setattr("app.adapters.nv_segment_ct.torch", object())
     monkeypatch.setattr("app.adapters.nv_segment_ct.decollate_batch", object())
+    monkeypatch.setattr("app.adapters.nv_segment_ct.Invertd", object())
     monkeypatch.setattr("app.adapters.nv_segment_ct.VistaPostTransformd", object())
 
     assert adapter.available()

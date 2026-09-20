@@ -589,6 +589,18 @@ class TaskOut(TaskCreated):
     error_message: str | None = None
 
 
+class SimulationCaseOut(BaseModel):
+    case_id: str
+    source_filename: str
+    status: Literal["PENDING", "SEGMENTING", "MESH_PROCESSING", "READY", "FAILED"]
+    progress: int = Field(ge=0, le=100)
+    manifest_url: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class BatchItemOut(BaseModel):
     task_id: str
     label_id: int | None = None

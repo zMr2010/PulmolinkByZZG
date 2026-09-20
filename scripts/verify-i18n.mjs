@@ -8,10 +8,24 @@ const hardcodedPriorityFiles = walk(join(root, 'src')).filter(file => file.endsW
 const technicalLiterals = new Set([
   'VOLUME RECONSTRUCTION', 'ANATOMY NAVIGATION', 'CT', 'MRI', 'X-Ray', 'RAS', 'PulmoLink',
 ])
+const technicalTranslationKeys = new Set([
+  'ui.copilot.engine',
+  'ui.simulation.kinematicWorker',
+  'ui.simulation.bvh',
+])
 
 function semanticKeys(file) {
   const source = readFileSync(join(root, file), 'utf8')
   return new Set([...source.matchAll(/['"](ui\.[^'"]+)['"]\s*:/g)].map(match => match[1]))
+}
+
+function literalEntries(file) {
+  const source = readFileSync(join(root, file), 'utf8')
+  const entries = new Map()
+  for (const match of source.matchAll(/['"](ui\.[^'"]+)['"]\s*:\s*(['"])(.*?)\2/g)) {
+    entries.set(match[1], match[3])
+  }
+  return entries
 }
 
 function walk(directory) {
@@ -22,6 +36,7 @@ function walk(directory) {
 }
 
 const [zh, en] = localeFiles.map(semanticKeys)
+const [zhEntries, enEntries] = localeFiles.map(literalEntries)
 const used = new Set()
 for (const file of walk(join(root, 'src'))) {
   const source = readFileSync(file, 'utf8')
@@ -33,6 +48,22 @@ const missingEn = [...used].filter(key => !en.has(key))
 const asymmetric = [...new Set([...zh, ...en])].filter(key => !zh.has(key) || !en.has(key))
 if (missingZh.length || missingEn.length || asymmetric.length) {
   console.error(JSON.stringify({ missingZh, missingEn, asymmetric }, null, 2))
+  process.exit(1)
+}
+
+const emptyTranslations = [...new Set([...zhEntries.keys(), ...enEntries.keys()])].filter(key =>
+  !zhEntries.get(key)?.trim() || !enEntries.get(key)?.trim()
+)
+const englishPollution = [...zhEntries].filter(([key, value]) => {
+  if (technicalTranslationKeys.has(key)) return false
+  if (/\p{Script=Han}/u.test(value)) return false
+  if (/^[A-Z0-9_+\-–—×·/:.() ]+$/.test(value)) return false
+  const words = value.match(/[A-Za-z]{3,}/g) || []
+  return words.length >= 2
+})
+const chinesePollution = [...enEntries].filter(([, value]) => /\p{Script=Han}/u.test(value))
+if (emptyTranslations.length || englishPollution.length || chinesePollution.length) {
+  console.error(JSON.stringify({ emptyTranslations, englishPollution, chinesePollution }, null, 2))
   process.exit(1)
 }
 
