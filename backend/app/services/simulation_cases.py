@@ -140,6 +140,8 @@ def run_simulation_case(settings: Settings, case_id: str) -> None:
         case_id,
         "--device",
         settings.nv_segment_device,
+        "--spacing",
+        *(str(value) for value in settings.nv_segment_spacing),
         "--roi",
         *(str(value) for value in settings.nv_segment_roi_size),
         "--overlap",

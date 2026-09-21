@@ -53,11 +53,10 @@ async function openSimulation() {
         <span>{{ $t('ui.patient3d.openSimulation') }}</span>
         <Scissors :size="16" />
       </button>
-      <button v-if="reconstructableStudies.length" type="button" class="btn btn-primary launch-btn" @click="openViewer">
-        <span>{{ $t('ui.patient3d.openInTab') }}</span>
+      <button type="button" class="btn btn-primary launch-btn" @click="openViewer">
+        <span>{{ $t(reconstructableStudies.length ? 'ui.patient3d.openInTab' : 'ui.patient3d.uploadFor3d') }}</span>
         <ScanLine :size="16" />
       </button>
-      <button v-else type="button" class="btn btn-secondary launch-btn" disabled>{{ unavailableReason }}</button>
     </div>
   </section>
 </template>

@@ -39,6 +39,7 @@ from app.services.label_catalog import LabelCatalog  # noqa: E402
 class RuntimeSettings:
     nv_segment_ct_dir: Path
     nv_segment_device: str
+    nv_segment_spacing: tuple[float, float, float]
     nv_segment_roi_size: tuple[int, int, int]
     nv_segment_overlap: float
     nv_segment_sw_batch_size: int
@@ -297,6 +298,7 @@ def build(args: argparse.Namespace) -> Path:
     settings = RuntimeSettings(
         nv_segment_ct_dir=model_root,
         nv_segment_device=args.device,
+        nv_segment_spacing=tuple(args.spacing),
         nv_segment_roi_size=tuple(args.roi),
         nv_segment_overlap=args.overlap,
         nv_segment_sw_batch_size=args.sw_batch_size,
@@ -405,6 +407,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--asset-prefix", default="/simulation/tcga-zf-aa5n")
     command.add_argument("--case-id", default="tcga-zf-aa5n")
     command.add_argument("--device", default="auto")
+    command.add_argument("--spacing", nargs=3, type=float, default=(1.5, 1.5, 1.5))
     command.add_argument("--roi", nargs=3, type=int, default=(192, 192, 128))
     command.add_argument("--overlap", type=float, default=0.3)
     command.add_argument("--sw-batch-size", type=int, default=1)

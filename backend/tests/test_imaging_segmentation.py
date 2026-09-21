@@ -113,6 +113,20 @@ def test_ct_dot_nii_gz_upload_is_accepted_and_stored(app_env, people, nifti_file
         assert stored_path(settings, image.file_path).is_file()
 
 
+def test_uncompressed_ct_dot_nii_is_not_mistaken_for_a_json_sidecar(
+    app_env, people, tmp_path
+):
+    source = tmp_path / "img_demo_real_ct.nii"
+    data = np.arange(12 * 14 * 16, dtype=np.int32).reshape(12, 14, 16)
+    nib.save(nib.Nifti1Image(data, np.diag([0.75, 0.75, 2.5, 1.0])), source)
+    image_id = upload(app_env[1], people, source)
+    response = app_env[1].get(
+        f"/api/v1/medical-images/{image_id}", headers=people["doctor_a"]
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["shape"] == [12, 14, 16]
+
+
 def test_dicom_gateway_is_closed_when_unconfigured(app_env, people):
     _, client, _, _ = app_env
     response = client.get("/api/v1/dicom/studies", headers=people["doctor_a"])

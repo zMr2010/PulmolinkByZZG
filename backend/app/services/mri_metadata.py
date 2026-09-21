@@ -60,8 +60,15 @@ def detect_from_nifti(path: Path, volume=None, original_name: str | None = None)
                 descrip = str(value or "")
             else:
                 db_name = str(value or "")
+    lower_name = path.name.lower()
+    if lower_name.endswith(".nii.gz"):
+        sidecar_candidates = (path.with_name(path.name[:-7] + ".json"),)
+    elif lower_name.endswith(".nii"):
+        sidecar_candidates = (path.with_suffix(".json"),)
+    else:
+        sidecar_candidates = ()
     sidecar = None
-    for candidate in (path.with_suffix(".json"), Path(str(path).replace(".nii.gz", ".json"))):
+    for candidate in sidecar_candidates:
         if candidate.is_file():
             sidecar = candidate
             break
@@ -69,7 +76,7 @@ def detect_from_nifti(path: Path, volume=None, original_name: str | None = None)
     if sidecar:
         try:
             sidecar_text = sidecar.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeError):
             sidecar_text = ""
     sequence, contrast = detect_sequence_from_text(name, descrip, db_name, sidecar_text)
     return {

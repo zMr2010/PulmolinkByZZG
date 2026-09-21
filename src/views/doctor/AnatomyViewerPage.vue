@@ -4,6 +4,8 @@ import { ArrowLeft, Eye, EyeOff, Focus, RotateCcw } from 'lucide-vue-next'
 import * as THREE from 'three'
 import { useRoute, useRouter } from 'vue-router'
 import { loadSimulationManifest } from '@/api/simulations'
+import { token } from '@/api/client'
+import IndependentCtCaseUpload from '@/components/medical/IndependentCtCaseUpload.vue'
 import { SceneRuntime } from '@/shared/3d/SceneRuntime'
 import { StructureModelManager } from '@/shared/3d/StructureModelManager'
 import type { Medical3DManifest } from '@/shared/3d/types'
@@ -63,7 +65,7 @@ function onPointerUp(event: PointerEvent) {
   selectStructure(hit ? String(hit.object.userData.structureId || '') : null)
 }
 
-async function initialize() {
+async function initialize(manifestUrl?: string) {
   cleanupRuntime()
   await nextTick()
   if (!host.value) return
@@ -76,17 +78,25 @@ async function initialize() {
   loadController = new AbortController()
   try {
     let loaded: Medical3DManifest
-    try {
-      loaded = await loadSimulationManifest(CT_MANIFEST, loadController.signal)
-    } catch (reason) {
-      if (loadController.signal.aborted) throw reason
-      loaded = await loadSimulationManifest(DEMO_MANIFEST, loadController.signal)
+    if (manifestUrl) {
+      loaded = await loadSimulationManifest(manifestUrl, loadController.signal)
+    } else {
+      try {
+        loaded = await loadSimulationManifest(CT_MANIFEST, loadController.signal)
+      } catch (reason) {
+        if (loadController.signal.aborted) throw reason
+        loaded = await loadSimulationManifest(DEMO_MANIFEST, loadController.signal)
+      }
     }
     if (currentGeneration !== generation || !host.value) return
     manifest.value = loaded
     visibility.value = Object.fromEntries(loaded.structures.map(item => [item.id, item.visible]))
     runtime = new SceneRuntime(host.value)
-    models = new StructureModelManager(runtime.scene)
+    const accessToken = manifestUrl?.startsWith('/api/') ? token() : null
+    models = new StructureModelManager(
+      runtime.scene,
+      accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    )
     const bounds = await models.load(loaded, (completed, total) => {
       loadProgress.value = Math.round(completed / Math.max(total, 1) * 100)
     })
@@ -132,7 +142,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 watch(bodyOpacity, value => models?.setBodyOpacity(value))
-watch(patientId, initialize)
+watch(patientId, () => { void initialize() })
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void initialize()
@@ -156,6 +166,8 @@ onBeforeUnmount(() => {
         <button type="button" class="viewer-button primary" @click="exitViewer"><ArrowLeft :size="16" />{{ $t('ui.anatomyViewer.exit') }}</button>
       </div>
     </header>
+
+    <IndependentCtCaseUpload purpose="anatomy" @ready="initialize" />
 
     <div class="viewer-layout">
       <div class="viewport-card">

@@ -195,6 +195,24 @@ $backendPidPath = Join-Path $previewRoot 'backend.pid'
 $frontendPidPath = Join-Path $previewRoot 'frontend.pid'
 Assert-PreviewPidAvailable -PidPath $backendPidPath -ExpectedCommand 'app.main:create_app' -Port $BackendPort
 Assert-PreviewPidAvailable -PidPath $frontendPidPath -ExpectedCommand 'node_modules\vite\bin\vite.js' -Port $FrontendPort
+# `pnpm start:demo`, Playwright, or an interrupted Vite session can leave this
+# checkout listening on the default frontend port without a preview PID file.
+# Starting the full stack is an explicit request to replace that same-project
+# demo, otherwise users keep opening the backend-less page at :4173.
+if (Test-TcpPortInUse -Port $FrontendPort) {
+  $viteEntry = Join-Path $frontendRoot 'node_modules\vite\bin\vite.js'
+  $sameProjectVite = Get-NetTCPConnection -State Listen -LocalPort $FrontendPort -ErrorAction SilentlyContinue |
+    ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" -ErrorAction SilentlyContinue } |
+    Where-Object { $_.CommandLine -and $_.CommandLine.Contains($viteEntry) } |
+    Select-Object -First 1
+  if ($sameProjectVite) {
+    Write-Output "Replacing the backend-less Vite demo on port $FrontendPort with the full-stack frontend."
+    Stop-Process -Id $sameProjectVite.ProcessId
+    for ($i = 0; $i -lt 20 -and (Test-TcpPortInUse -Port $FrontendPort); $i++) {
+      Start-Sleep -Milliseconds 100
+    }
+  }
+}
 if (Test-TcpPortInUse -Port $BackendPort) {
   $availableBackendPort = (($BackendPort + 1)..($BackendPort + 20) |
     Where-Object { -not (Test-TcpPortInUse -Port $_) } |
